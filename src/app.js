@@ -521,10 +521,20 @@ function emptyCampaign(partial = {}) {
 function buildPreview(camp) {
   const nameHint = "Если имени нет — робот его не говорит";
   return {
-    greeting: camp.preview?.greeting || `Здравствуйте! ${nameHint}`,
-    says: camp.preview?.says || (camp.details || "Сначала сохраните цель и сведения"),
-    replies: camp.preview?.replies || "Отвечает коротко по сути вопроса",
-    tone: camp.preview?.tone || "Спокойно и по делу, без давления оформить любой ценой",
+    greeting: (camp.preview?.greeting ?? "").trim() || `Здравствуйте! ${nameHint}`,
+    says: (camp.preview?.says ?? "").trim() || (camp.details || camp.goal || "Сначала сохраните цель и сведения"),
+    replies: (camp.preview?.replies ?? "").trim() || "Отвечает коротко по сути вопроса",
+    tone: (camp.preview?.tone ?? "").trim() || "Спокойно и по делу, без давления оформить любой ценой",
+  };
+}
+
+function mergePreviewDefaults(camp) {
+  const p = buildPreview(camp);
+  return {
+    greeting: camp.preview?.greeting?.trim() ? camp.preview.greeting : p.greeting,
+    says: camp.preview?.says?.trim() ? camp.preview.says : p.says,
+    replies: camp.preview?.replies?.trim() ? camp.preview.replies : p.replies,
+    tone: camp.preview?.tone?.trim() ? camp.preview.tone : p.tone,
   };
 }
 
@@ -765,11 +775,15 @@ function campaignWorkspace(camp) {
     ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
     <p class="hint meta-line">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
 
-    <div class="workspace-grid">
+    <div class="workspace-grid workspace-grid-top">
       ${blockGoalContext(camp)}
       ${blockBotPreview(camp, weak, started)}
     </div>
-    ${blockScenario(camp)}
+
+    <div class="workspace-block">
+      ${blockScenario(camp)}
+    </div>
+
     <div class="workspace-grid">
       ${blockSchedule(camp)}
       <section class="flow-section" id="sec-telephony-summary">
@@ -777,24 +791,30 @@ function campaignWorkspace(camp) {
         <div class="panel wide">${telephonyStatusCompact()}</div>
       </section>
     </div>
-    ${blockNumbers(camp)}
-    <section class="flow-section" id="sec-analytics">
-      <h2>Итоги / аналитика кампании</h2>
-      <div class="panel wide">${blockCampaignAnalytics(camp)}</div>
-    </section>
-    <section class="flow-section" id="sec-launch">
-      <h2>Блоки запуска</h2>
-      <div class="panel wide">
-        ${launchGatesHtml(camp) || `<p class="hint">Ограничений нет — можно запускать из шапки</p>`}
-        ${
-          camp.dial_state === "running"
-            ? `<p class="hint">Текущий разговор закончим. Новые звонки не начнём</p><p class="hint">Обзвон уже идёт</p>`
-            : camp.dial_state === "paused"
-              ? `<p class="hint">Текущий разговор закончим. Новые звонки не начнём</p>`
-              : ""
-        }
-      </div>
-    </section>
+
+    <div class="workspace-block">
+      ${blockNumbers(camp)}
+    </div>
+
+    <div class="workspace-grid">
+      <section class="flow-section" id="sec-analytics">
+        <h2>Итоги кампании</h2>
+        <div class="panel wide">${blockCampaignAnalytics(camp)}</div>
+      </section>
+      <section class="flow-section" id="sec-launch">
+        <h2>Готовность к запуску</h2>
+        <div class="panel wide">
+          ${launchGatesHtml(camp) || `<p class="hint">Ограничений нет — можно запускать из шапки</p>`}
+          ${
+            camp.dial_state === "running"
+              ? `<p class="hint">Текущий разговор закончим. Новые звонки не начнём</p><p class="hint">Обзвон уже идёт</p>`
+              : camp.dial_state === "paused"
+                ? `<p class="hint">Текущий разговор закончим. Новые звонки не начнём</p>`
+                : ""
+          }
+        </div>
+      </section>
+    </div>
   </div>`;
 }
 
@@ -835,33 +855,50 @@ function blockGoalContext(camp) {
 
 function blockBotPreview(camp, weak, started) {
   const preview = buildPreview(camp);
+  const dis = started || locked() ? "disabled" : "";
   return `<section class="flow-section" id="sec-preview">
-    <h2>Как говорит бот</h2>
-    <div class="panel wide">
+    <div class="section-head">
+      <h2>Робот так понял сценарий</h2>
+      ${!started && !locked() ? `<p class="hint">Можно править каждый блок</p>` : ""}
+    </div>
+    <form class="panel wide preview-panel" id="preview-form">
       ${
         weak && !started
           ? `<div class="banner banner-warn">
           <strong>Сценарий пока слишком слабый для обзвона</strong>
-          <p class="hint">Допишите цель и сведения или поправьте текст</p>
+          <p class="hint">Допишите цель и сведения или поправьте текст ниже</p>
         </div>`
           : ""
       }
-      <h3>Робот так понял сценарий</h3>
+      <div class="preview-edit-grid">
+        <div class="preview-field">
+          <label for="preview-greeting">Приветствие</label>
+          <textarea id="preview-greeting" rows="4" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
+          <p class="hint">Если имени нет — робот его не говорит</p>
+        </div>
+        <div class="preview-field">
+          <label for="preview-says">Что говорит</label>
+          <textarea id="preview-says" rows="4" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
+        </div>
+        <div class="preview-field">
+          <label for="preview-replies">Как отвечает</label>
+          <textarea id="preview-replies" rows="4" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
+        </div>
+        <div class="preview-field">
+          <label for="preview-tone">Тон</label>
+          <textarea id="preview-tone" rows="4" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
+          <p class="hint">Без давления оформить любой ценой</p>
+        </div>
+      </div>
       ${
-        !camp.goal
-          ? `<p class="hint">Сначала сохраните цель и сведения</p>`
-          : `<div class="preview-grid">
-            <div><h4>Приветствие</h4><p>${escapeHtml(preview.greeting)}</p>
-              <p class="hint">Нет имени — в приветствии обойдёмся без обращения</p>
-              <p class="hint">Если имени нет — робот его не говорит</p>
-              <p class="hint">Пример: Здравствуйте!</p></div>
-            <div><h4>Что говорит</h4><p>${escapeHtml(preview.says)}</p></div>
-            <div><h4>Как отвечает</h4><p>${escapeHtml(preview.replies)}</p></div>
-            <div><h4>Тон</h4><p>${escapeHtml(preview.tone)}</p>
-              <p class="hint">Спокойно и по делу, без давления оформить любой ценой</p></div>
-          </div>`
+        started || locked()
+          ? `<p class="hint">${started ? "После старта превью только смотрим" : "Аккаунт заблокирован — правки недоступны"}</p>`
+          : `<div class="row-actions">
+              <button class="btn" type="submit">Сохранить превью</button>
+            </div>
+            <p class="hint ok-line" id="preview-ok" hidden>Превью сохранено</p>`
       }
-    </div>
+    </form>
   </section>`;
 }
 
@@ -1563,11 +1600,34 @@ function bindCampaignForms() {
       camp.goal = goal;
       camp.details = document.getElementById("camp-details-edit").value;
       camp.verdicts = ensureVerdicts(camp);
-      camp.preview = buildPreview(camp);
+      camp.preview = mergePreviewDefaults(camp);
       persistCampaigns();
       err.hidden = true;
       ok.hidden = false;
       render();
+    };
+  }
+
+  const previewForm = document.getElementById("preview-form");
+  if (previewForm) {
+    previewForm.onsubmit = (e) => {
+      e.preventDefault();
+      const camp = workspaceCampaign();
+      if (!camp || isStarted(camp) || locked()) return;
+      const greeting = document.getElementById("preview-greeting").value.trim();
+      const says = document.getElementById("preview-says").value.trim();
+      const replies = document.getElementById("preview-replies").value.trim();
+      const tone = document.getElementById("preview-tone").value.trim();
+      if (!greeting || !says || !replies || !tone) {
+        flash("Заполните все четыре блока превью", "error");
+        return;
+      }
+      camp.preview = { greeting, says, replies, tone };
+      if (!camp.scenarioText) camp.scenarioText = says;
+      persistCampaigns();
+      const ok = document.getElementById("preview-ok");
+      if (ok) ok.hidden = false;
+      flash("Превью сохранено");
     };
   }
 
@@ -1614,14 +1674,14 @@ function bindCampaignForms() {
     saveScenario.onclick = () => {
       if (!camp || isStarted(camp) || locked()) return;
       camp.scenarioText = document.getElementById("scenario-text").value;
-      camp.preview = buildPreview({
-        ...camp,
-        preview: {
-          ...camp.preview,
-          says: camp.scenarioText,
-          greeting: camp.preview?.greeting || "Здравствуйте!",
-        },
-      });
+      // не затираем ручное превью — только подставляем «что говорит», если пусто
+      const prev = camp.preview || {};
+      camp.preview = {
+        greeting: prev.greeting || "Здравствуйте!",
+        says: prev.says?.trim() ? prev.says : camp.scenarioText,
+        replies: prev.replies || "Отвечает коротко по сути вопроса",
+        tone: prev.tone || "Спокойно и по делу, без давления оформить любой ценой",
+      };
       persistCampaigns();
       document.getElementById("scenario-ok").hidden = false;
     };
