@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout } from "./api.js?v=17";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=18";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -15,7 +15,7 @@ const STATUS_LABEL = {
   [STATUS.cancel]: "Отмена",
 };
 
-/** FE-070 / DESIGN-079 */
+/** FE-070 / DESIGN-079 — локальные SIP/валидации; API-коды → errorMessage() */
 const ERROR_BY_CODE = {
   auth_failed: "Неверный логин или пароль",
   insufficient_balance: "Недостаточно средств",
@@ -51,6 +51,7 @@ const CABINET_TABS = [
   { id: "campaigns", label: "Кампании", href: "#/cabinet/campaigns" },
   { id: "integrations", label: "Интеграции", href: "#/cabinet/integrations" },
   { id: "analytics", label: "Аналитика", href: "#/cabinet/analytics" },
+  { id: "tariffs", label: "Тарифы", href: "#/cabinet/tariffs" },
   { id: "account", label: "Аккаунт", href: "#/cabinet/account" },
 ];
 
@@ -113,9 +114,17 @@ const state = {
     telephonyPanel: null,
     showNewCampaign: false,
     adminExpandedId: null,
+    adminLoaded: false,
+    telephonyLoaded: false,
+    campaignsLoaded: false,
+    gateErrors: [],
     statusExpandKey: null,
     scheduleDrawerOpen: false,
     contactStatusFilter: "all",
+  },
+  adminSettings: {
+    batch_interval_sec: Number(localStorage.getItem("cm_interval") || "30"),
+    default_price_per_minute: Number(localStorage.getItem("cm_default_tariff") || "0"),
   },
 };
 
@@ -178,6 +187,7 @@ function parseCabinet(path) {
   if (ws?.id && ws.id !== "new") return { tab: "campaigns", page: "workspace", id: ws.id };
   if (path === "/cabinet/integrations") return { tab: "integrations", page: "integrations" };
   if (path === "/cabinet/analytics") return { tab: "analytics", page: "analytics" };
+  if (path === "/cabinet/tariffs") return { tab: "tariffs", page: "tariffs" };
   if (path === "/cabinet/account") return { tab: "account", page: "account" };
   return null;
 }
@@ -449,6 +459,22 @@ function adminCompanyCardInline(c) {
     <p>Баланс: ${escapeHtml(String(c.balance || 0))} ₽
       <span class="hint">≈ ${mins} мин по тарифу</span></p>
     <p>Тариф за минуту: ${escapeHtml(String(c.price_per_minute ?? "—"))}</p>
+    <div class="nested-form" data-packages="${escapeHtml(c.id)}">
+      <h3>Пакеты минут</h3>
+      <p class="hint">Пополнение по пакету ставит тариф ступени. Уже лежащий баланс не пересчитываем.</p>
+      <table class="data">
+        <thead><tr><th>Пакет</th><th>₽/мин</th><th>Сумма</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>1 000 мин</td><td>8</td><td>8 000 ₽</td><td><button class="btn secondary" type="button" data-apply-package="pkg_1000" data-id="${escapeHtml(c.id)}" data-label="1 000 мин / 8 000 ₽ / 8 ₽/мин">Выбрать</button></td></tr>
+          <tr><td>3 000 мин</td><td>7</td><td>21 000 ₽</td><td><button class="btn secondary" type="button" data-apply-package="pkg_3000" data-id="${escapeHtml(c.id)}" data-label="3 000 мин / 21 000 ₽ / 7 ₽/мин">Выбрать</button></td></tr>
+          <tr><td>5 000 мин</td><td>6</td><td>30 000 ₽</td><td><button class="btn secondary" type="button" data-apply-package="pkg_5000" data-id="${escapeHtml(c.id)}" data-label="5 000 мин / 30 000 ₽ / 6 ₽/мин">Выбрать</button></td></tr>
+          <tr><td>10 000 мин</td><td>5</td><td>50 000 ₽</td><td><button class="btn secondary" type="button" data-apply-package="pkg_10000" data-id="${escapeHtml(c.id)}" data-label="10 000 мин / 50 000 ₽ / 5 ₽/мин">Выбрать</button></td></tr>
+          <tr><td>25 000 мин</td><td>4</td><td>100 000 ₽</td><td><button class="btn secondary" type="button" data-apply-package="pkg_25000" data-id="${escapeHtml(c.id)}" data-label="25 000 мин / 100 000 ₽ / 4 ₽/мин">Выбрать</button></td></tr>
+        </tbody>
+      </table>
+      <p class="hint ok-line" id="package-ok" hidden>Баланс и тариф обновлены</p>
+      <div class="error" id="package-error" hidden></div>
+    </div>
     <form id="topup-form" data-id="${escapeHtml(c.id)}" class="nested-form">
       <label>Пополнить, ₽</label>
       <input id="topup-amount" type="number" min="0" step="1" />
@@ -475,8 +501,8 @@ function adminCompanyCardInline(c) {
 }
 
 function adminSettings() {
-  const interval = localStorage.getItem("cm_interval") || "30";
-  const tariff = localStorage.getItem("cm_default_tariff") || "0";
+  const interval = String(state.adminSettings.batch_interval_sec ?? 30);
+  const tariff = String(state.adminSettings.default_price_per_minute ?? 0);
   return `<div>
     <form class="panel" id="interval-form">
       <h3>Интервал подачи пачек</h3>
@@ -500,6 +526,69 @@ function adminSettings() {
   </div>`;
 }
 
+function formatLedgerEntry(e) {
+  if (typeof e === "string") return e;
+  if (!e || typeof e !== "object") return "";
+  if (e.type === "top_up") return `Пополнение +${e.amount_rub} ₽`;
+  if (e.type === "tariff_change" || e.type === "set_tariff") return `Тариф: ${e.price_per_minute} ₽/мин`;
+  if (e.comment) return String(e.comment);
+  return String(e.type || "Операция");
+}
+
+function mapAdminCompany(c) {
+  const ledger = c.ledger_preview || c.entries || c.history || [];
+  return {
+    id: c.id,
+    name: c.name || "",
+    login: c.login || "",
+    access_status: c.access_status || "active",
+    created_at: String(c.created_at || "").slice(0, 10),
+    price_per_minute: c.price_per_minute,
+    balance: c.balance_rub != null ? c.balance_rub : c.balance || 0,
+    history: Array.isArray(ledger) ? ledger.map(formatLedgerEntry) : [],
+  };
+}
+
+async function refreshAdminCompanies() {
+  if (!hasApi()) return;
+  const data = await apiFetch("/api/admin/companies", { session: state.session });
+  const items = (data?.items || []).map(mapAdminCompany);
+  const expanded = state.ui.adminExpandedId;
+  if (expanded) {
+    try {
+      const card = await apiFetch(`/api/admin/companies/${encodeURIComponent(expanded)}`, {
+        session: state.session,
+      });
+      const mapped = mapAdminCompany(card);
+      state.companies = items.map((c) => (String(c.id) === String(expanded) ? { ...c, ...mapped } : c));
+    } catch {
+      state.companies = items;
+    }
+  } else {
+    state.companies = items;
+  }
+  state.ui.adminLoaded = true;
+}
+
+async function refreshAdminSettings() {
+  if (!hasApi()) return;
+  const data = await apiFetch("/api/admin/settings", { session: state.session });
+  state.adminSettings = {
+    batch_interval_sec: data.batch_interval_sec ?? 30,
+    default_price_per_minute: data.default_price_per_minute ?? 0,
+  };
+}
+
+async function ensureAdminData() {
+  if (!hasApi() || state.role !== "superadmin" || state.impersonate) return;
+  try {
+    await Promise.all([refreshAdminCompanies(), refreshAdminSettings()]);
+    render();
+  } catch (e) {
+    flash(errorMessage(e?.code), "error");
+  }
+}
+
 /* ---------- cabinet sections ---------- */
 
 function emptyCampaign(partial = {}) {
@@ -519,8 +608,76 @@ function emptyCampaign(partial = {}) {
     columns: [],
     uploadWarnings: [],
     analytics: null,
+    ever_started: false,
     ...partial,
   };
+}
+
+function mapCampaignFromApi(c, existing = {}) {
+  const schedule =
+    c.schedule && (c.schedule.days || c.schedule.from || c.schedule.tz)
+      ? {
+          days: c.schedule.days || existing.schedule?.days || ["mon", "tue", "wed", "thu", "fri"],
+          from: c.schedule.from || c.schedule.start_hour || existing.schedule?.from || "10:00",
+          to: c.schedule.to || c.schedule.end_hour || existing.schedule?.to || "18:00",
+          tz: c.schedule.tz || c.schedule.region || existing.schedule?.tz || "Europe/Moscow",
+        }
+      : existing.schedule || emptyCampaign().schedule;
+  return emptyCampaign({
+    ...existing,
+    id: c.id,
+    name: existing.name || (c.goal || "").slice(0, 48),
+    goal: c.goal || "",
+    details: c.details || "",
+    dial_state: c.dial_state || "draft",
+    ever_started: Boolean(c.ever_started),
+    scenarioText: c.scenario_text != null ? c.scenario_text : existing.scenarioText || "",
+    stages: Array.isArray(c.stages) ? c.stages : existing.stages || [],
+    verdicts: Array.isArray(c.verdicts) ? c.verdicts : existing.verdicts || [],
+    schedule,
+    retries: c.retries_max != null ? c.retries_max : existing.retries ?? 2,
+    contacts: existing.contacts || [],
+    columns: existing.columns || [],
+    preview: existing.preview || { greeting: "", says: "", replies: "", tone: "" },
+  });
+}
+
+async function refreshCampaigns() {
+  if (!hasApi()) return;
+  const data = await apiFetch("/api/cabinet/campaigns", { session: state.session });
+  const byId = Object.fromEntries(state.campaigns.map((c) => [String(c.id), c]));
+  state.campaigns = (data?.items || []).map((item) => mapCampaignFromApi(item, byId[String(item.id)] || {}));
+  state.ui.campaignsLoaded = true;
+  persistCampaigns();
+}
+
+async function refreshCampaignDialState(camp) {
+  if (!hasApi() || !camp?.id) return camp;
+  const data = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}`, {
+    session: state.session,
+  });
+  if (data?.dial_state) camp.dial_state = data.dial_state;
+  if (data?.ever_started != null) camp.ever_started = Boolean(data.ever_started);
+  persistCampaigns();
+  return camp;
+}
+
+function ensureDialStatePoll() {
+  if (state.ui._dialPollTimer) return;
+  state.ui._dialPollTimer = setInterval(() => {
+    const camp = workspaceCampaign();
+    if (!hasApi() || !camp) return;
+    if (camp.dial_state !== "running" && camp.dial_state !== "paused") return;
+    void (async () => {
+      try {
+        await refreshCampaignDialState(camp);
+        await refreshCampaignContacts(camp);
+        render();
+      } catch {
+        /* keep prior table; no fake status churn */
+      }
+    })();
+  }, 5000);
 }
 
 function buildPreview(camp) {
@@ -560,6 +717,7 @@ function cabinetBody(parsed) {
   if (parsed.page !== "workspace") state.ui.scheduleDrawerOpen = false;
   if (parsed.page === "integrations") return sectionTelephony();
   if (parsed.page === "analytics") return pageAnalytics();
+  if (parsed.page === "tariffs") return pageTariffs();
   if (parsed.page === "account") return pageAccount();
   if (parsed.page === "new") return pageCampaignNew();
   if (parsed.page === "workspace") {
@@ -642,11 +800,71 @@ function pageAccount() {
              <p class="hint">Чтобы снять блокировку, напишите в поддержку CallMate</p></div>`
           : `<p class="hint">Доступ активен</p>`
       }
-      <p>Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
-      <p class="hint">Пополнение делает поддержка CallMate</p>
+      <p><a href="#/cabinet/tariffs">Баланс и тариф — в разделе Тарифы</a></p>
       <p class="hint">Тема оформления — в шапке страницы</p>
     </div>
   </section>`;
+}
+
+const TARIFF_PACKAGES = [
+  { minutes: 1000, price: 8, amount: 8000 },
+  { minutes: 3000, price: 7, amount: 21000 },
+  { minutes: 5000, price: 6, amount: 30000 },
+  { minutes: 10000, price: 5, amount: 50000 },
+  { minutes: 25000, price: 4, amount: 100000 },
+];
+
+function pageTariffs() {
+  const bal = Number(state.companyBalance) || 0;
+  const tariff = Number(state.companyTariff) || 0;
+  const approx =
+    tariff > 0 ? Math.floor(bal / tariff) : null;
+  const approxHtml =
+    approx == null
+      ? `<p class="hint">Тариф ещё не задан</p>`
+      : `<p>≈ ${escapeHtml(String(approx))} мин по вашему тарифу</p>`;
+  const rows = TARIFF_PACKAGES.map((p) => {
+    const yours = tariff > 0 && Number(tariff) === p.price ? ' <span class="badge badge-quiet">Ваш тариф</span>' : "";
+    return `<tr>
+      <td>${escapeHtml(String(p.minutes.toLocaleString("ru-RU")))} мин${yours}</td>
+      <td>${escapeHtml(String(p.price))} ₽</td>
+      <td>${escapeHtml(String(p.amount.toLocaleString("ru-RU")))} ₽</td>
+    </tr>`;
+  }).join("");
+  return `<section class="flow-section" id="sec-tariffs">
+    <h2>Тарифы</h2>
+    <div class="panel wide">
+      <p><strong>Баланс:</strong> ${escapeHtml(String(bal))} ₽</p>
+      ${approxHtml}
+      <p><strong>Ваш тариф:</strong> ${
+        tariff > 0
+          ? `${escapeHtml(String(tariff))} ₽ за минуту разговора`
+          : "тариф ещё не задан"
+      }</p>
+      <h3>Пакеты минут</h3>
+      <p class="hint">Чем больше пакет, тем ниже цена минуты. Минимальный пакет — 1 000 минут.</p>
+      <table class="data">
+        <thead><tr><th>Пакет</th><th>Цена за минуту</th><th>Сумма</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p class="hint">Считаем минуты состоявшегося разговора. Недозвон не тарифицируем.</p>
+      <p class="hint">Пополнить баланс может поддержка CallMate. В кабинете оплаты нет.</p>
+    </div>
+  </section>`;
+}
+
+async function refreshCabinetMe() {
+  if (!hasApi() || !state.session) return;
+  const me = await apiFetch("/api/cabinet/me", { session: state.session });
+  if (me.balance_rub != null) {
+    state.companyBalance = Number(me.balance_rub);
+    localStorage.setItem("cm_co_balance", String(state.companyBalance));
+  }
+  if (me.price_per_minute != null) {
+    state.companyTariff = Number(me.price_per_minute);
+    localStorage.setItem("cm_co_tariff", String(state.companyTariff));
+  }
+  if (me.locked != null) state.companyLocked = Boolean(me.locked);
 }
 
 function pageAnalytics() {
@@ -680,21 +898,23 @@ function pageAnalytics() {
 }
 
 function blockCampaignAnalytics(camp) {
-  if (!camp.analytics) {
-    return `<p>Пока нет данных по кампании</p>
-      <button class="btn secondary" type="button" disabled title="Пока нечего выгружать">Скачать Excel</button>
-      <p class="hint">Пока нечего выгружать</p>`;
-  }
   const a = camp.analytics;
+  if (!a) {
+    return `<p>Пока нет данных по кампании</p>
+      <button class="btn secondary" type="button" id="export-excel">Скачать Excel</button>
+      <p class="hint">Нули до звонков допустимы — можно выгрузить пустой отчёт</p>
+      <p class="hint" id="export-status" hidden></p>
+      <div class="error" id="export-error" hidden></div>`;
+  }
   return `<div>
       <p class="hint">${escapeHtml(camp.name || "Без названия")}</p>
-      <div>Звонков: ${escapeHtml(String(a.calls ?? 0))}</div>
-      <div>Средняя длительность: ${escapeHtml(a.avgDuration || "—")}</div>
-      <div><strong>До цели</strong>: ${escapeHtml(String(a.goalReached ?? 0))}</div>
+      <div>Звонков: ${escapeHtml(String(a.calls ?? a.calls_total ?? 0))}</div>
+      <div>Средняя длительность: ${escapeHtml(a.avgDuration || a.avg_duration || "—")}</div>
+      <div><strong>До цели</strong>: ${escapeHtml(String(a.goalReached ?? a.goal_reached ?? 0))}</div>
       <p class="hint">По итогам разговора относительно цели кампании</p>
-      <div><strong>Минуты разговора</strong>: ${escapeHtml(String(a.minutes ?? 0))}</div>
+      <div><strong>Минуты разговора</strong>: ${escapeHtml(String(a.minutes ?? a.minutes_total ?? 0))}</div>
       <div><strong>Ваш тариф за минуту</strong>: ${escapeHtml(String(state.companyTariff))}</div>
-      <div><strong>Стоимость кампании</strong>: ${escapeHtml(String(a.cost ?? a.minutes * state.companyTariff))}</div>
+      <div><strong>Стоимость кампании</strong>: ${escapeHtml(String(a.cost ?? a.cost_rub ?? (a.minutes || 0) * state.companyTariff))}</div>
       <p class="hint">Стоимость = минуты × ваш тариф</p>
       <div class="row-actions">
         <button class="btn" type="button" id="export-excel">Скачать Excel</button>
@@ -713,7 +933,7 @@ function telephonyStatusLine() {
       : "Телефония подключена";
   }
   if (t.status === "error") {
-    return ERROR_BY_CODE[t.lastError] || ERROR_BY_CODE.sip_unknown;
+    return ERROR_BY_CODE[t.lastError] || errorMessage(t.lastError) || ERROR_BY_CODE.sip_unknown;
   }
   return "Телефония не подключена";
 }
@@ -749,7 +969,7 @@ function reasonLinkHtml(reason, { asButton = true } = {}) {
     return `<a class="ready-reason" href="#/cabinet/integrations">${text}</a>`;
   }
   if (jump === "account") {
-    return `<a class="ready-reason" href="#/cabinet/account">${text}</a>`;
+    return `<a class="ready-reason" href="#/cabinet/tariffs">${text}</a>`;
   }
   if (jump) {
     return asButton
@@ -766,7 +986,7 @@ function reasonCtaHtml(reason) {
     return `<a class="btn secondary ready-cta-btn" href="#/cabinet/integrations">${text}</a>`;
   }
   if (jump === "account") {
-    return `<a class="btn secondary ready-cta-btn" href="#/cabinet/account">${text}</a>`;
+    return `<a class="btn secondary ready-cta-btn" href="#/cabinet/tariffs">${text}</a>`;
   }
   if (jump) {
     return `<button type="button" class="btn secondary ready-cta-btn" data-jump="${escapeHtml(jump)}">${text}</button>`;
@@ -867,13 +1087,23 @@ function dialActionsHtml(camp) {
     camp.dial_state === "draft" || camp.dial_state === "stopped"
       ? reasons.length === 0 && !locked()
       : false;
+  const drainHint =
+    '<p class="hint dial-drain-hint">Текущий разговор закончим. Новые звонки не начнём</p>';
   if (camp.dial_state === "running") {
-    return `<button class="btn" type="button" id="dial-pause" ${roAttr()}>Пауза</button>
-      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>`;
+    return `<div class="launch-cluster">
+      <button class="btn" type="button" id="dial-pause" ${roAttr()}>Пауза</button>
+      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
+      ${drainHint}
+      <p class="hint" id="dial-progress" hidden></p>
+    </div>`;
   }
   if (camp.dial_state === "paused") {
-    return `<button class="btn" type="button" id="dial-resume" ${roAttr()}>Продолжить</button>
-      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>`;
+    return `<div class="launch-cluster">
+      <button class="btn" type="button" id="dial-resume" ${roAttr()}>Продолжить</button>
+      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
+      ${drainHint}
+      <p class="hint" id="dial-progress" hidden></p>
+    </div>`;
   }
   const disabled = !canStart || locked();
   const why =
@@ -907,7 +1137,7 @@ function campaignWorkspace(camp) {
       </div>
     </div>
     ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
-    <p class="hint meta-line">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
+    <p class="hint meta-line"><a href="#/cabinet/tariffs">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</a></p>
 
     ${readinessStripHtml(camp)}
     ${scheduleDrawerHtml(camp)}
@@ -1045,12 +1275,17 @@ function linesField(value, { standalone = true } = {}) {
 }
 
 function sipFormInline() {
+  const host = escapeHtml(state.telephony.sip_host || "");
+  const login = escapeHtml(state.telephony.sip_login || "");
+  const pwdHint = state.telephony.has_sip_password
+    ? `<p class="hint">Пароль уже сохранён. Введите новый, только если меняете</p>`
+    : `<p class="hint">Пароль сохраним, но снова не покажем</p>`;
   return `<form class="panel nested" id="sip-form">
     <h3>SIP</h3>
-    <label>Адрес</label><input id="sip-host" placeholder="sip.example.com" ${roAttr()} />
-    <label>Логин</label><input id="sip-login" placeholder="Ваш логин" ${roAttr()} />
+    <label>Адрес</label><input id="sip-host" placeholder="sip.example.com" value="${host}" ${roAttr()} />
+    <label>Логин</label><input id="sip-login" placeholder="Ваш логин" value="${login}" ${roAttr()} />
     <label>Пароль</label><input id="sip-password" type="password" placeholder="Пароль" ${roAttr()} />
-    <p class="hint">Пароль сохраним, но снова не покажем</p>
+    ${pwdHint}
     ${linesField(state.telephony.lines != null ? state.telephony.lines : "", { standalone: false })}
     <div class="error" id="sip-error" hidden></div>
     <div class="row-actions">
@@ -1093,7 +1328,7 @@ function sectionTelephony() {
         <button class="btn secondary" type="button" data-open-tel="sip" ${roAttr()}>Изменить данные</button>
       </div>`;
   } else if (t.status === "error") {
-    const msg = ERROR_BY_CODE[t.lastError] || ERROR_BY_CODE.sip_unknown;
+    const msg = errorMessage(t.lastError) || ERROR_BY_CODE.sip_unknown;
     body = `<h3>Не удалось подключить телефонию</h3>
       <p class="error">${escapeHtml(msg)}</p>
       <div class="row-actions">
@@ -1379,6 +1614,16 @@ function scheduleDrawerHtml(camp) {
 
 function launchBlockReasons(camp) {
   const reasons = [];
+  if (hasApi() && Array.isArray(state.ui.gateErrors) && state.ui.gateErrors.length) {
+    for (const err of state.ui.gateErrors) {
+      const code = typeof err === "string" ? err : err?.code;
+      reasons.push({
+        text: errorMessage(code) || String(code || "Пока нельзя начать"),
+        code,
+      });
+    }
+    return reasons;
+  }
   if (!(camp.contacts && camp.contacts.length)) reasons.push({ text: "Загрузите контакты", action: "contacts" });
   const missingCol = (camp.uploadWarnings || []).find((w) => w.includes("столбца") || w.includes("столбц"));
   if (missingCol) reasons.push({ text: "В файле нет столбца для поля сценария" });
@@ -1389,22 +1634,38 @@ function launchBlockReasons(camp) {
   if (state.companyBalance <= 0 && !state.impersonate) reasons.push({ text: "Недостаточно средств", money: true });
   if (locked()) reasons.push({ text: "Аккаунт заблокирован" });
   if (isWeakScenario(camp) && camp.dial_state === "draft") reasons.push({ text: "Пока нельзя начать обзвон", weak: true });
+  if (!hasApi()) reasons.push({ text: errorMessage("api_not_configured") });
   return reasons;
+}
+
+async function refreshGates(camp) {
+  if (!hasApi() || !camp?.id) {
+    state.ui.gateErrors = [];
+    return;
+  }
+  const data = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/gates`, {
+    session: state.session,
+  });
+  state.ui.gateErrors = data?.ok ? [] : data?.errors || [{ code: "gate_failed" }];
 }
 
 function contactDrawerHtml(camp, contact) {
   const attempts = contact.attempts || [];
   const attemptRows = attempts.length
     ? attempts
-        .map(
-          (a, i) => `<tr>
-          <td>${i + 1}</td>
-          <td>${escapeHtml(a.when || "")}</td>
-          <td>${escapeHtml(outcomeLabel(a.outcome))}</td>
-        </tr>`
-        )
+        .map((a) => {
+          const n = a.attempt_no != null ? a.attempt_no : "";
+          const when = a.when || (a.duration_sec != null ? `${a.duration_sec} с` : "");
+          const outcome = a.cause_code || a.outcome || a.result || "";
+          return `<tr>
+          <td>${escapeHtml(String(n))}</td>
+          <td>${escapeHtml(String(when))}</td>
+          <td>${escapeHtml(outcomeLabel(outcome))}</td>
+        </tr>`;
+        })
         .join("")
     : `<tr><td colspan="3">Попыток ещё не было</td></tr>`;
+  const transcript = contact.last_transcript || contact.transcript || "";
   return `<div class="panel nested contact-drawer">
     <h3>Номер</h3>
     <p>${escapeHtml(maskPhone(contact.phone))}</p>
@@ -1413,15 +1674,14 @@ function contactDrawerHtml(camp, contact) {
     <p><strong>Вердикт</strong>: ${
       contact.verdict ? escapeHtml(contact.verdict) : "Вердикта нет — разговора не было"
     }</p>
-    <p class="hint">Вердикт — про цель, не про статус обзвона</p>
     <p class="hint">Вердикт — про цель кампании, не про статус</p>
     <h4>Попытки</h4>
     <table class="data">
-      <thead><tr><th>№</th><th>Когда</th><th>Исход</th></tr></thead>
+      <thead><tr><th>№</th><th></th><th>Исход</th></tr></thead>
       <tbody>${attemptRows}</tbody>
     </table>
     <h4>Разговор</h4>
-    <p class="hint">${contact.transcript ? escapeHtml(contact.transcript) : "Записи разговора пока нет"}</p>
+    <p class="hint">${transcript ? escapeHtml(transcript) : "Записи разговора пока нет"}</p>
     <button class="btn secondary" type="button" data-collapse-status>Свернуть</button>
   </div>`;
 }
@@ -1433,6 +1693,11 @@ function outcomeLabel(code) {
     voicemail: "Автоответчик",
     early: "Ранний сброс",
     connected: "Дозвонились",
+    answered_stub: "Дозвонились",
+    answered_human: "Дозвонились",
+    provider_down: "Сбой связи",
+    no_answer: "Недозвон",
+    tech_fail: "Сбой связи",
   };
   return map[code] || code || "—";
 }
@@ -1603,6 +1868,9 @@ async function parseContactsFile(file) {
 /* ---------- auth views ---------- */
 
 function loginView() {
+  const apiHint = hasApi()
+    ? `<p class="hint">В кабинет компании или в админку</p>`
+    : `<p class="hint">Сначала укажите адрес API — сейчас только проверка вёрстки</p>`;
   return `<div class="login-wrap">
     <section class="login-hero" aria-label="CallMate">
       <p class="login-brand">CallMate</p>
@@ -1611,7 +1879,7 @@ function loginView() {
     <aside class="login-aside">
       <form class="panel" id="login-form">
         <h1>Вход</h1>
-        <p class="hint">В кабинет компании или в админку</p>
+        ${apiHint}
         <label for="login">Логин</label>
         <input id="login" name="login" autocomplete="username" placeholder="Ваш логин" />
         <label for="password">Пароль</label>
@@ -1665,6 +1933,61 @@ function render() {
     app.innerHTML = cabinetShell(cabinet.tab, cabinetBody(cabinet));
     bindShell();
     clearFlashSoon();
+    if (hasApi() && cabinet.page === "integrations" && !state.ui.telephonyLoaded) {
+      state.ui.telephonyLoaded = true;
+      void refreshTelephony()
+        .then(() => render())
+        .catch((e) => flash(errorMessage(e?.code), "error"));
+    }
+    if (
+      hasApi() &&
+      !state.ui.campaignsLoaded &&
+      (cabinet.tab === "campaigns" || cabinet.page === "workspace")
+    ) {
+      state.ui.campaignsLoaded = true;
+      void refreshCampaigns()
+        .then(async () => {
+          const camp = workspaceCampaign() || activeCampaign();
+          if (camp) {
+            await refreshCampaignContacts(camp).catch(() => {});
+            await refreshGates(camp).catch(() => {});
+          }
+          render();
+        })
+        .catch((e) => {
+          state.ui.campaignsLoaded = false;
+          flash(errorMessage(e?.code), "error");
+        });
+    }
+    if (hasApi() && cabinet.page === "analytics") {
+      const camp = activeCampaign();
+      if (camp) {
+        void apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/analytics/summary`, {
+          session: state.session,
+        })
+          .then((summary) => {
+            camp.analytics = {
+              calls: summary.calls ?? summary.calls_total ?? 0,
+              avgDuration: summary.avg_duration || summary.avgDuration || "—",
+              goalReached: summary.goal_reached ?? summary.goalReached ?? 0,
+              minutes: summary.minutes ?? summary.minutes_total ?? 0,
+              cost: summary.cost_rub ?? summary.cost ?? 0,
+            };
+            persistCampaigns();
+            render();
+          })
+          .catch((e) => flash(errorMessage(e?.code), "error"));
+      }
+    }
+    if (hasApi() && (cabinet.page === "tariffs" || cabinet.page === "account" || cabinet.page === "workspace")) {
+      void refreshCabinetMe()
+        .then(() => {
+          if (cabinet.page === "tariffs" || cabinet.page === "account") render();
+        })
+        .catch((e) => {
+          if (cabinet.page === "tariffs") flash(errorMessage(e?.code) || "Не удалось загрузить тарифы", "error");
+        });
+    }
     return;
   }
   if (path === "/admin" || path === "/admin/settings") {
@@ -1675,6 +1998,9 @@ function render() {
     app.innerHTML = adminShell(path === "/admin/settings" ? "settings" : "companies");
     bindShell();
     clearFlashSoon();
+    if (hasApi() && !state.ui.adminLoaded) {
+      void ensureAdminData();
+    }
     return;
   }
   if (path === "/forbidden") {
@@ -1749,9 +2075,21 @@ function bindShell() {
   }
   const exitImp = document.getElementById("exit-impersonate");
   if (exitImp) {
-    exitImp.onclick = () => {
+    exitImp.onclick = async () => {
+      try {
+        if (hasApi()) {
+          const restored = await apiFetch("/api/admin/exit-cabinet", {
+            method: "POST",
+            session: state.session,
+          });
+          applySessionPayload(restored);
+        }
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
       state.impersonate = null;
       localStorage.removeItem("cm_impersonate");
+      state.ui.adminLoaded = false;
       navigate("/admin");
       render();
     };
@@ -1770,7 +2108,7 @@ function bindShell() {
 function bindAdminForms() {
   const intervalForm = document.getElementById("interval-form");
   if (intervalForm) {
-    intervalForm.onsubmit = (e) => {
+    intervalForm.onsubmit = async (e) => {
       e.preventDefault();
       const v = Number(document.getElementById("interval-sec").value);
       const err = document.getElementById("interval-error");
@@ -1781,15 +2119,31 @@ function bindAdminForms() {
         err.textContent = "Укажите число не меньше 1";
         return;
       }
-      err.hidden = true;
-      ok.hidden = false;
-      localStorage.setItem("cm_interval", String(v));
+      try {
+        if (hasApi()) {
+          const data = await apiFetch("/api/admin/settings", {
+            method: "PUT",
+            session: state.session,
+            body: { batch_interval_sec: v },
+          });
+          state.adminSettings.batch_interval_sec = data.batch_interval_sec;
+        } else {
+          localStorage.setItem("cm_interval", String(v));
+          state.adminSettings.batch_interval_sec = v;
+        }
+        err.hidden = true;
+        ok.hidden = false;
+      } catch (ex) {
+        err.hidden = false;
+        ok.hidden = true;
+        err.textContent = errorMessage(ex?.code);
+      }
     };
   }
 
   const newCompanyForm = document.getElementById("new-company-form");
   if (newCompanyForm) {
-    newCompanyForm.onsubmit = (e) => {
+    newCompanyForm.onsubmit = async (e) => {
       e.preventDefault();
       const name = document.getElementById("co-name").value.trim();
       const login = document.getElementById("co-login").value.trim();
@@ -1800,33 +2154,49 @@ function bindAdminForms() {
         err.textContent = "Заполните все поля";
         return;
       }
-      if (state.companies.some((c) => c.login === login)) {
+      try {
+        if (hasApi()) {
+          const result = await apiFetch("/api/admin/companies", {
+            method: "POST",
+            session: state.session,
+            body: { name, login, password },
+          });
+          const mapped = mapAdminCompany({ ...result.company, login: result.login });
+          state.companies = [mapped, ...state.companies.filter((c) => c.id !== mapped.id)];
+          state.ui.adminExpandedId = mapped.id;
+        } else {
+          if (state.companies.some((c) => c.login === login)) {
+            err.hidden = false;
+            err.textContent = "Такой логин уже есть";
+            return;
+          }
+          const id = `co-${Date.now()}`;
+          state.companies.push({
+            id,
+            name,
+            login,
+            access_status: "active",
+            created_at: new Date().toISOString().slice(0, 10),
+            price_per_minute: state.adminSettings.default_price_per_minute || 0,
+            balance: 0,
+            history: [],
+          });
+          persistCompanies();
+          state.ui.adminExpandedId = id;
+        }
+        document.getElementById("co-ok").hidden = false;
+        err.hidden = true;
+        render();
+      } catch (ex) {
         err.hidden = false;
-        err.textContent = "Такой логин уже есть";
-        return;
+        err.textContent = errorMessage(ex?.code === "validation_error" ? "validation" : ex?.code);
       }
-      const id = `co-${Date.now()}`;
-      state.companies.push({
-        id,
-        name,
-        login,
-        access_status: "active",
-        created_at: new Date().toISOString().slice(0, 10),
-        price_per_minute: Number(localStorage.getItem("cm_default_tariff") || 0),
-        balance: 0,
-        history: [],
-      });
-      persistCompanies();
-      document.getElementById("co-ok").hidden = false;
-      err.hidden = true;
-      state.ui.adminExpandedId = id;
-      render();
     };
   }
 
   const tariffForm = document.getElementById("default-tariff-form");
   if (tariffForm) {
-    tariffForm.onsubmit = (e) => {
+    tariffForm.onsubmit = async (e) => {
       e.preventDefault();
       const v = Number(document.getElementById("default-tariff").value);
       const err = document.getElementById("tariff-error");
@@ -1837,16 +2207,46 @@ function bindAdminForms() {
         err.textContent = "Укажите цену больше нуля";
         return;
       }
-      err.hidden = true;
-      ok.hidden = false;
-      localStorage.setItem("cm_default_tariff", String(v));
+      try {
+        if (hasApi()) {
+          const data = await apiFetch("/api/admin/settings", {
+            method: "PUT",
+            session: state.session,
+            body: { default_price_per_minute: v },
+          });
+          state.adminSettings.default_price_per_minute = data.default_price_per_minute;
+        } else {
+          localStorage.setItem("cm_default_tariff", String(v));
+          state.adminSettings.default_price_per_minute = v;
+        }
+        err.hidden = true;
+        ok.hidden = false;
+      } catch (ex) {
+        err.hidden = false;
+        ok.hidden = true;
+        err.textContent = errorMessage(ex?.code);
+      }
     };
   }
 
   document.querySelectorAll("[data-expand-company]").forEach((btn) => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       const id = btn.getAttribute("data-expand-company");
-      state.ui.adminExpandedId = String(state.ui.adminExpandedId) === String(id) ? null : id;
+      const next = String(state.ui.adminExpandedId) === String(id) ? null : id;
+      state.ui.adminExpandedId = next;
+      if (next && hasApi()) {
+        try {
+          const card = await apiFetch(`/api/admin/companies/${encodeURIComponent(next)}`, {
+            session: state.session,
+          });
+          const mapped = mapAdminCompany(card);
+          state.companies = state.companies.map((c) =>
+            String(c.id) === String(next) ? { ...c, ...mapped } : c
+          );
+        } catch (ex) {
+          flash(errorMessage(ex?.code), "error");
+        }
+      }
       render();
     };
   });
@@ -1860,7 +2260,7 @@ function bindAdminForms() {
 
   const topup = document.getElementById("topup-form");
   if (topup) {
-    topup.onsubmit = (e) => {
+    topup.onsubmit = async (e) => {
       e.preventDefault();
       const id = topup.getAttribute("data-id");
       const c = companyById(id);
@@ -1873,39 +2273,127 @@ function bindAdminForms() {
         err.textContent = "Укажите сумму больше нуля";
         return;
       }
-      c.balance = (c.balance || 0) + amount;
-      c.history = c.history || [];
-      c.history.push(`Пополнение +${amount} ₽`);
-      persistCompanies();
-      err.hidden = true;
-      ok.hidden = false;
-      render();
+      try {
+        if (hasApi()) {
+          const res = await apiFetch(`/api/admin/companies/${encodeURIComponent(id)}/top-up`, {
+            method: "POST",
+            session: state.session,
+            body: { amount_rub: amount },
+          });
+          c.balance = res.balance_rub;
+          await refreshAdminCompanies();
+        } else {
+          c.balance = (c.balance || 0) + amount;
+          c.history = c.history || [];
+          c.history.push(`Пополнение +${amount} ₽`);
+          persistCompanies();
+        }
+        err.hidden = true;
+        ok.hidden = false;
+        render();
+      } catch (ex) {
+        err.hidden = false;
+        ok.hidden = true;
+        err.textContent = errorMessage(ex?.code === "invalid_amount" ? "validation" : ex?.code);
+      }
     };
   }
 
+  document.querySelectorAll("[data-apply-package]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute("data-id");
+      const packageId = btn.getAttribute("data-apply-package");
+      const label = btn.getAttribute("data-label") || packageId;
+      const c = companyById(id);
+      const err = document.getElementById("package-error");
+      const ok = document.getElementById("package-ok");
+      if (!confirm(`Пополнить по пакету «${label}» и поставить тариф ступени?`)) return;
+      try {
+        if (!hasApi()) {
+          flash("Укажите адрес API");
+          return;
+        }
+        const res = await apiFetch(`/api/admin/companies/${encodeURIComponent(id)}/apply-package`, {
+          method: "POST",
+          session: state.session,
+          body: { package_id: packageId },
+        });
+        if (c) {
+          c.balance = res.balance_rub ?? c.balance;
+          c.price_per_minute = res.price_per_minute ?? c.price_per_minute;
+        }
+        await refreshAdminCompanies();
+        if (err) err.hidden = true;
+        if (ok) ok.hidden = false;
+        flash("Баланс и тариф обновлены");
+        render();
+      } catch (ex) {
+        if (ok) ok.hidden = true;
+        if (err) {
+          err.hidden = false;
+          err.textContent = errorMessage(ex?.code) || "Не удалось применить пакет";
+        } else {
+          flash(errorMessage(ex?.code) || "Не удалось применить пакет", "error");
+        }
+      }
+    };
+  });
+
   const openCab = document.getElementById("open-cabinet");
   if (openCab) {
-    openCab.onclick = () => {
+    openCab.onclick = async () => {
       const c = companyById(openCab.getAttribute("data-id"));
-      state.impersonate = { id: c.id, name: c.name };
-      saveJson("cm_impersonate", state.impersonate);
-      state.companyLocked = c.access_status === "locked";
-      navigate("/cabinet/campaigns");
-      render();
+      try {
+        if (hasApi()) {
+          const res = await apiFetch(`/api/admin/companies/${encodeURIComponent(c.id)}/open-cabinet`, {
+            method: "POST",
+            session: state.session,
+          });
+          applySessionPayload({
+            session: res.session,
+            role: res.role,
+            company_locked: res.company_locked,
+            impersonated_company_id: res.company_id,
+          });
+          state.impersonate = { id: c.id, name: c.name, companyId: c.id };
+          saveJson("cm_impersonate", state.impersonate);
+        } else {
+          state.impersonate = { id: c.id, name: c.name };
+          saveJson("cm_impersonate", state.impersonate);
+          state.companyLocked = c.access_status === "locked";
+        }
+        navigate("/cabinet/campaigns");
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
     };
   }
 
   const toggleLock = document.getElementById("toggle-lock");
   if (toggleLock) {
-    toggleLock.onclick = () => {
+    toggleLock.onclick = async () => {
       const c = companyById(toggleLock.getAttribute("data-id"));
       if (c.access_status === "locked") {
-        c.access_status = "active";
-        c.history = c.history || [];
-        c.history.push("Компания разблокирована");
-        persistCompanies();
-        flash("Компания разблокирована");
-        render();
+        try {
+          if (hasApi()) {
+            const res = await apiFetch(`/api/admin/companies/${encodeURIComponent(c.id)}/lock`, {
+              method: "POST",
+              session: state.session,
+              body: { locked: false },
+            });
+            c.access_status = res.access_status || "active";
+          } else {
+            c.access_status = "active";
+            c.history = c.history || [];
+            c.history.push("Компания разблокирована");
+            persistCompanies();
+          }
+          flash("Компания разблокирована");
+          render();
+        } catch (ex) {
+          flash(errorMessage(ex?.code), "error");
+        }
         return;
       }
       document.getElementById("lock-dialog").hidden = false;
@@ -1918,20 +2406,33 @@ function bindAdminForms() {
     };
   const lockConfirm = document.getElementById("lock-confirm");
   if (lockConfirm) {
-    lockConfirm.onclick = () => {
+    lockConfirm.onclick = async () => {
       const c = companyById(lockConfirm.getAttribute("data-id"));
-      c.access_status = "locked";
-      c.history = c.history || [];
-      c.history.push("Компания заблокирована");
-      persistCompanies();
-      flash("Компания заблокирована");
-      render();
+      try {
+        if (hasApi()) {
+          const res = await apiFetch(`/api/admin/companies/${encodeURIComponent(c.id)}/lock`, {
+            method: "POST",
+            session: state.session,
+            body: { locked: true },
+          });
+          c.access_status = res.access_status || "locked";
+        } else {
+          c.access_status = "locked";
+          c.history = c.history || [];
+          c.history.push("Компания заблокирована");
+          persistCompanies();
+        }
+        flash("Компания заблокирована");
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
     };
   }
 
   const changeTariff = document.getElementById("change-tariff");
   if (changeTariff) {
-    changeTariff.onclick = () => {
+    changeTariff.onclick = async () => {
       const c = companyById(changeTariff.getAttribute("data-id"));
       const v = prompt("Тариф за минуту", String(c.price_per_minute || 0));
       if (v == null) return;
@@ -1940,11 +2441,24 @@ function bindAdminForms() {
         flash(ERROR_BY_CODE.validation, "error");
         return;
       }
-      c.price_per_minute = n;
-      c.history = c.history || [];
-      c.history.push("Тариф изменён");
-      persistCompanies();
-      render();
+      try {
+        if (hasApi()) {
+          const res = await apiFetch(`/api/admin/companies/${encodeURIComponent(c.id)}/tariff`, {
+            method: "POST",
+            session: state.session,
+            body: { price_per_minute: n },
+          });
+          c.price_per_minute = res.price_per_minute ?? n;
+        } else {
+          c.price_per_minute = n;
+          c.history = c.history || [];
+          c.history.push("Тариф изменён");
+          persistCompanies();
+        }
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
     };
   }
 }
@@ -1952,7 +2466,7 @@ function bindAdminForms() {
 function bindCampaignForms() {
   const previewForm = document.getElementById("preview-form");
   if (previewForm) {
-    previewForm.onsubmit = (e) => {
+    previewForm.onsubmit = async (e) => {
       e.preventDefault();
       const camp = workspaceCampaign();
       if (!camp || isStarted(camp) || locked()) return;
@@ -1981,17 +2495,29 @@ function bindCampaignForms() {
       camp.verdicts = ensureVerdicts(camp);
       camp.preview = { greeting, says, replies, tone };
       if (!camp.scenarioText) camp.scenarioText = says;
-      persistCampaigns();
-      const ok = document.getElementById("preview-ok");
-      if (ok) ok.hidden = false;
-      flash("Превью сохранено");
-      render();
+      try {
+        if (hasApi()) {
+          const updated = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}`, {
+            method: "PATCH",
+            session: state.session,
+            body: { goal, details },
+          });
+          Object.assign(camp, mapCampaignFromApi(updated, camp));
+        }
+        persistCampaigns();
+        const ok = document.getElementById("preview-ok");
+        if (ok) ok.hidden = false;
+        flash("Превью сохранено");
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
     };
   }
 
   const newCampaignForm = document.getElementById("new-campaign-form");
   if (newCampaignForm) {
-    newCampaignForm.onsubmit = (e) => {
+    newCampaignForm.onsubmit = async (e) => {
       e.preventDefault();
       if (locked()) return;
       const goal = document.getElementById("camp-goal").value.trim();
@@ -2003,36 +2529,76 @@ function bindCampaignForms() {
       }
       const details = document.getElementById("camp-details").value;
       const name = document.getElementById("camp-name").value.trim();
-      const camp = emptyCampaign({
-        name,
-        goal,
-        details,
-        preview: {
-          greeting: "Здравствуйте!",
-          says: details || goal,
-          replies: "Отвечает коротко по сути вопроса",
-          tone: "Спокойно и по делу, без давления оформить любой ценой",
-        },
-        scenarioText: details,
-        stages: [{ goal, input: "Приветствие", output: "Суть" }],
-        verdicts: ensureVerdicts({ goal }),
-      });
-      state.campaigns.push(camp);
-      persistCampaigns();
-      setActiveCampaignId(camp.id);
-      state.ui.showNewCampaign = false;
-      flash("Кампания создана");
-      navigate(`/cabinet/campaigns/${camp.id}`);
+      try {
+        let camp;
+        if (hasApi()) {
+          const created = await apiFetch("/api/cabinet/campaigns", {
+            method: "POST",
+            session: state.session,
+            body: { goal, details },
+          });
+          camp = mapCampaignFromApi(created, {
+            name,
+            preview: {
+              greeting: "Здравствуйте!",
+              says: details || goal,
+              replies: "Отвечает коротко по сути вопроса",
+              tone: "Спокойно и по делу, без давления оформить любой ценой",
+            },
+            stages: [{ goal, input: "Приветствие", output: "Суть" }],
+            verdicts: ensureVerdicts({ goal }),
+            scenarioText: details,
+          });
+          if (camp.stages?.length) {
+            try {
+              await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
+                method: "PUT",
+                session: state.session,
+                body: {
+                  scenario_text: camp.scenarioText || details || goal,
+                  stages: camp.stages,
+                  verdicts: camp.verdicts,
+                },
+              });
+            } catch {
+              /* stages optional on create */
+            }
+          }
+        } else {
+          camp = emptyCampaign({
+            name,
+            goal,
+            details,
+            preview: {
+              greeting: "Здравствуйте!",
+              says: details || goal,
+              replies: "Отвечает коротко по сути вопроса",
+              tone: "Спокойно и по делу, без давления оформить любой ценой",
+            },
+            scenarioText: details,
+            stages: [{ goal, input: "Приветствие", output: "Суть" }],
+            verdicts: ensureVerdicts({ goal }),
+          });
+        }
+        state.campaigns.push(camp);
+        persistCampaigns();
+        setActiveCampaignId(camp.id);
+        state.ui.showNewCampaign = false;
+        flash("Кампания создана");
+        navigate(`/cabinet/campaigns/${camp.id}`);
+      } catch (ex) {
+        err.hidden = false;
+        err.textContent = errorMessage(ex?.code);
+      }
     };
   }
 
   const saveScenario = document.getElementById("save-scenario");
   if (saveScenario) {
     const camp = workspaceCampaign() || activeCampaign();
-    saveScenario.onclick = () => {
+    saveScenario.onclick = async () => {
       if (!camp || isStarted(camp) || locked()) return;
       camp.scenarioText = document.getElementById("scenario-text").value;
-      // не затираем ручное превью — только подставляем «что говорит», если пусто
       const prev = camp.preview || {};
       camp.preview = {
         greeting: prev.greeting || "Здравствуйте!",
@@ -2040,8 +2606,23 @@ function bindCampaignForms() {
         replies: prev.replies || "Отвечает коротко по сути вопроса",
         tone: prev.tone || "Спокойно и по делу, без давления оформить любой ценой",
       };
-      persistCampaigns();
-      document.getElementById("scenario-ok").hidden = false;
+      try {
+        if (hasApi()) {
+          await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
+            method: "PUT",
+            session: state.session,
+            body: {
+              scenario_text: camp.scenarioText,
+              stages: camp.stages || [],
+              verdicts: camp.verdicts || [],
+            },
+          });
+        }
+        persistCampaigns();
+        document.getElementById("scenario-ok").hidden = false;
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
     };
     const insertAttr = document.getElementById("insert-attr");
     if (insertAttr) {
@@ -2060,7 +2641,7 @@ function bindCampaignForms() {
       };
     });
     document.querySelectorAll(".stage-form, .stage-form-compact").forEach((form) => {
-      form.onsubmit = (e) => {
+      form.onsubmit = async (e) => {
         e.preventDefault();
         if (!camp || isStarted(camp) || locked()) return;
         const idx = Number(form.getAttribute("data-idx"));
@@ -2070,15 +2651,30 @@ function bindCampaignForms() {
           input: form.input.value,
           output: form.output.value,
         };
-        persistCampaigns();
-        flash("Черновик сохранён");
+        try {
+          if (hasApi()) {
+            await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
+              method: "PUT",
+              session: state.session,
+              body: {
+                scenario_text: camp.scenarioText || "",
+                stages: camp.stages,
+                verdicts: camp.verdicts || [],
+              },
+            });
+          }
+          persistCampaigns();
+          flash("Черновик сохранён");
+        } catch (ex) {
+          flash(errorMessage(ex?.code), "error");
+        }
       };
     });
   }
 
   const scheduleForm = document.getElementById("schedule-form");
   if (scheduleForm) {
-    scheduleForm.onsubmit = (e) => {
+    scheduleForm.onsubmit = async (e) => {
       e.preventDefault();
       const camp = workspaceCampaign() || activeCampaign();
       if (!camp || isStarted(camp) || locked()) return;
@@ -2117,10 +2713,21 @@ function bindCampaignForms() {
       }
       camp.schedule = { days, from, to, tz };
       camp.retries = retries;
-      persistCampaigns();
-      state.ui.scheduleDrawerOpen = false;
-      flash("Сохранено");
-      render();
+      try {
+        if (hasApi()) {
+          await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/schedule`, {
+            method: "PUT",
+            session: state.session,
+            body: { schedule: camp.schedule, retries_max: retries },
+          });
+        }
+        persistCampaigns();
+        state.ui.scheduleDrawerOpen = false;
+        flash("Сохранено");
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
     };
   }
 
@@ -2167,6 +2774,31 @@ function saveLinesFromForm() {
   return true;
 }
 
+function applyTelephonyPayload(p) {
+  if (!p) return;
+  const status =
+    p.connection_status === "ok" ? "ok" : p.connection_status === "error" ? "error" : "unknown";
+  state.telephony = {
+    ...state.telephony,
+    status,
+    provider: p.mode || state.telephony.provider,
+    lines: p.lines_limit != null ? p.lines_limit : state.telephony.lines,
+    sipSaved: Boolean(p.has_sip_password || p.sip_host),
+    has_sip_password: Boolean(p.has_sip_password),
+    sip_host: p.sip_host || "",
+    sip_login: p.sip_login || "",
+    lastError: p.error_code || null,
+    checking: p.connection_status === "checking",
+  };
+  persistTelephony();
+}
+
+async function refreshTelephony() {
+  if (!hasApi()) return;
+  const data = await apiFetch("/api/cabinet/telephony", { session: state.session });
+  applyTelephonyPayload(data);
+}
+
 function bindTelephony() {
   document.querySelectorAll("[data-open-tel]").forEach((btn) => {
     btn.onclick = () => {
@@ -2183,75 +2815,167 @@ function bindTelephony() {
 
   const linesForm = document.getElementById("lines-form");
   if (linesForm) {
-    linesForm.onsubmit = (e) => {
+    linesForm.onsubmit = async (e) => {
       e.preventDefault();
       if (locked()) return;
-      if (saveLinesFromForm()) flash("Сохранено");
+      if (!saveLinesFromForm()) return;
+      if (!hasApi()) {
+        flash("Сохранено");
+        return;
+      }
+      try {
+        const body = {
+          mode: state.telephony.provider === "mango" ? "mango" : "sip",
+          lines_limit: state.telephony.lines,
+          sip_host: state.telephony.sip_host || "",
+          sip_login: state.telephony.sip_login || "",
+        };
+        const data = await apiFetch("/api/cabinet/telephony", {
+          method: "PUT",
+          session: state.session,
+          body,
+        });
+        applyTelephonyPayload(data);
+        flash("Сохранено");
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
     };
   }
 
   const sipFormEl = document.getElementById("sip-form");
   if (sipFormEl) {
-    sipFormEl.onsubmit = (e) => {
+    sipFormEl.onsubmit = async (e) => {
       e.preventDefault();
       if (locked()) return;
       if (!saveLinesFromForm()) return;
-      state.telephony.sipSaved = true;
-      state.telephony.provider = "sip";
-      document.getElementById("sip-password").value = "";
-      persistTelephony();
-      flash("Сохранено");
+      const sip_host = document.getElementById("sip-host").value.trim();
+      const sip_login = document.getElementById("sip-login").value.trim();
+      const sip_password = document.getElementById("sip-password").value;
+      const err = document.getElementById("sip-error");
+      if (!hasApi()) {
+        state.telephony.sipSaved = true;
+        state.telephony.provider = "sip";
+        state.telephony.sip_host = sip_host;
+        state.telephony.sip_login = sip_login;
+        document.getElementById("sip-password").value = "";
+        persistTelephony();
+        flash("Сохранено");
+        return;
+      }
+      try {
+        const body = {
+          mode: "sip",
+          sip_host,
+          sip_login,
+          lines_limit: state.telephony.lines || 1,
+        };
+        if (sip_password) body.sip_password = sip_password;
+        const data = await apiFetch("/api/cabinet/telephony", {
+          method: "PUT",
+          session: state.session,
+          body,
+        });
+        applyTelephonyPayload(data);
+        document.getElementById("sip-password").value = "";
+        if (err) err.hidden = true;
+        flash("Сохранено");
+        render();
+      } catch (ex) {
+        if (err) {
+          err.hidden = false;
+          err.textContent = errorMessage(ex?.code);
+        } else {
+          flash(errorMessage(ex?.code), "error");
+        }
+      }
     };
     const check = document.getElementById("sip-check");
-    if (check) check.onclick = () => runSipCheck("ok");
+    if (check) check.onclick = () => runSipCheck();
   }
 
   const recheck = document.getElementById("sip-recheck");
-  if (recheck) recheck.onclick = () => runSipCheck("ok");
+  if (recheck) recheck.onclick = () => runSipCheck();
 
   const mango = document.getElementById("mango-form");
   if (mango) {
-    mango.onsubmit = (e) => {
+    mango.onsubmit = async (e) => {
       e.preventDefault();
       if (locked()) return;
       if (!saveLinesFromForm()) return;
-      document.getElementById("mango-password").value = "";
+      const pwd = document.getElementById("mango-password");
+      if (pwd) pwd.value = "";
+      if (!hasApi()) {
+        flash(errorMessage("api_not_configured"), "error");
+        return;
+      }
       state.telephony.checking = true;
       persistTelephony();
       render();
-      setTimeout(() => {
-        state.telephony.checking = false;
-        state.telephony.status = "ok";
-        state.telephony.provider = "mango";
-        state.telephony.lastError = null;
+      try {
+        const data = await apiFetch("/api/cabinet/telephony", {
+          method: "PUT",
+          session: state.session,
+          body: { mode: "mango", lines_limit: state.telephony.lines || 1 },
+        });
+        applyTelephonyPayload(data);
         state.ui.telephonyPanel = null;
-        persistTelephony();
         flash("Телефония подключена");
         render();
-      }, 600);
+      } catch (ex) {
+        state.telephony.checking = false;
+        state.telephony.status = "error";
+        state.telephony.lastError = ex?.code || "sip_unknown";
+        persistTelephony();
+        flash(errorMessage(ex?.code), "error");
+        render();
+      }
     };
   }
 }
 
-function runSipCheck(result) {
+async function runSipCheck() {
   if (locked()) return;
+  if (!hasApi()) {
+    flash(errorMessage("api_not_configured"), "error");
+    return;
+  }
   state.telephony.checking = true;
   persistTelephony();
   render();
-  setTimeout(() => {
-    state.telephony.checking = false;
-    if (result === "ok") {
-      state.telephony.status = "ok";
-      state.telephony.provider = state.telephony.provider || "sip";
-      state.telephony.lastError = null;
+  try {
+    const result = await apiFetch("/api/cabinet/telephony/verify", {
+      method: "POST",
+      session: state.session,
+    });
+    applyTelephonyPayload({
+      ...state.telephony,
+      connection_status: result.connection_status,
+      error_code: result.error_code,
+      mode: state.telephony.provider || "sip",
+      lines_limit: state.telephony.lines,
+      sip_host: state.telephony.sip_host,
+      sip_login: state.telephony.sip_login,
+      has_sip_password: state.telephony.has_sip_password,
+    });
+    if (result.connection_status === "ok") {
       state.ui.telephonyPanel = null;
+      flash("Телефония подключена");
     } else {
       state.telephony.status = "error";
-      state.telephony.lastError = result;
+      state.telephony.lastError = result.error_code || "sip_unknown";
     }
     persistTelephony();
     render();
-  }, 700);
+  } catch (ex) {
+    state.telephony.checking = false;
+    state.telephony.status = "error";
+    state.telephony.lastError = ex?.code || "sip_unknown";
+    persistTelephony();
+    flash(errorMessage(ex?.code), "error");
+    render();
+  }
 }
 
 function bindContacts() {
@@ -2259,7 +2983,7 @@ function bindContacts() {
   const file = document.getElementById("contact-file");
   if (pick && file) {
     pick.onclick = () => file.click();
-    file.onchange = () => simulateUpload(file.files?.[0]);
+    file.onchange = () => uploadContactsFile(file.files?.[0]);
   }
   const zone = document.getElementById("upload-zone");
   if (zone) {
@@ -2269,7 +2993,7 @@ function bindContacts() {
     zone.ondrop = (e) => {
       e.preventDefault();
       if (locked()) return;
-      simulateUpload(e.dataTransfer.files?.[0]);
+      uploadContactsFile(e.dataTransfer.files?.[0]);
     };
   }
 
@@ -2277,43 +3001,77 @@ function bindContacts() {
 
   const cancelBtn = document.getElementById("cancel-contacts");
   if (cancelBtn && camp) {
-    cancelBtn.onclick = () => {
-      const selected = [...document.querySelectorAll(".contact-check:checked")].map((el) =>
-        el.getAttribute("data-phone")
-      );
+    cancelBtn.onclick = async () => {
+      const selected = [...document.querySelectorAll(".contact-check:checked")].map((el) => ({
+        phone: el.getAttribute("data-phone"),
+        id: el.getAttribute("data-id"),
+      }));
       const msg = document.getElementById("contacts-action-msg");
       if (!selected.length) {
         msg.textContent = "Выберите номера";
         return;
       }
       if (!confirm("Снять выбранные номера с обзвона?")) return;
-      for (const p of selected) {
-        const row = camp.contacts.find((c) => c.phone === p);
-        if (row) row.status = STATUS.cancel;
+      try {
+        if (hasApi()) {
+          for (const row of selected) {
+            const ct = camp.contacts.find((c) => c.phone === row.phone || c.id === row.id);
+            if (!ct?.id) continue;
+            await apiFetch(
+              `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/cancel`,
+              { method: "POST", session: state.session }
+            );
+            ct.status = STATUS.cancel;
+          }
+        } else {
+          for (const p of selected) {
+            const row = camp.contacts.find((c) => c.phone === p.phone);
+            if (row) row.status = STATUS.cancel;
+          }
+        }
+        persistCampaigns();
+        msg.textContent = "Сняли с обзвона";
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
       }
-      persistCampaigns();
-      msg.textContent = "Сняли с обзвона";
-      render();
     };
   }
   const restoreBtn = document.getElementById("restore-contacts");
   if (restoreBtn && camp) {
-    restoreBtn.onclick = () => {
-      const selected = [...document.querySelectorAll(".contact-check:checked")].map((el) =>
-        el.getAttribute("data-phone")
-      );
+    restoreBtn.onclick = async () => {
+      const selected = [...document.querySelectorAll(".contact-check:checked")].map((el) => ({
+        phone: el.getAttribute("data-phone"),
+        id: el.getAttribute("data-id"),
+      }));
       const msg = document.getElementById("contacts-action-msg");
       if (!selected.length) {
         msg.textContent = "Выберите номера";
         return;
       }
-      for (const p of selected) {
-        const row = camp.contacts.find((c) => c.phone === p);
-        if (row && row.status === STATUS.cancel) row.status = STATUS.in_progress;
+      try {
+        if (hasApi()) {
+          for (const row of selected) {
+            const ct = camp.contacts.find((c) => c.phone === row.phone || c.id === row.id);
+            if (!ct?.id) continue;
+            await apiFetch(
+              `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/restore`,
+              { method: "POST", session: state.session }
+            );
+            ct.status = STATUS.in_progress;
+          }
+        } else {
+          for (const p of selected) {
+            const row = camp.contacts.find((c) => c.phone === p.phone);
+            if (row && row.status === STATUS.cancel) row.status = STATUS.in_progress;
+          }
+        }
+        persistCampaigns();
+        msg.textContent = "Вернули в обзвон";
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
       }
-      persistCampaigns();
-      msg.textContent = "Вернули в обзвон";
-      render();
     };
   }
 
@@ -2323,7 +3081,25 @@ function bindContacts() {
   }
 }
 
-function simulateUpload(file) {
+async function refreshCampaignContacts(camp) {
+  if (!hasApi() || !camp?.id) return;
+  const data = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts`, {
+    session: state.session,
+  });
+  camp.contacts = (data?.items || []).map((item) => ({
+    id: item.id,
+    phone: item.phone,
+    status: item.status || STATUS.in_progress,
+    attrs: item.attrs || {},
+    verdict: item.verdict ?? null,
+    attempt_count: item.attempt_count ?? 0,
+    last_transcript: item.last_transcript ?? null,
+    attempts: item.attempts || item.last_attempt ? [item.last_attempt].filter(Boolean) : [],
+  }));
+  persistCampaigns();
+}
+
+async function uploadContactsFile(file) {
   if (!file || locked()) return;
   const camp = workspaceCampaign() || activeCampaign();
   if (!camp) return;
@@ -2338,78 +3114,56 @@ function simulateUpload(file) {
   ok.hidden = true;
   errors.innerHTML = "";
 
-  parseContactsFile(file)
-    .then((parsed) => {
-      progress.hidden = true;
-      hint.hidden = true;
+  if (!hasApi()) {
+    progress.hidden = true;
+    hint.hidden = true;
+    errors.innerHTML = `<p class="error">${escapeHtml(errorMessage("api_not_configured"))}</p>`;
+    return;
+  }
 
-      if (parsed.error === "format") {
-        errors.innerHTML = `<p class="error">Нужен файл Excel или CSV</p>`;
-        return;
-      }
-      if (parsed.error === "empty") {
-        errors.innerHTML = `<p class="error">В файле нет строк</p>`;
-        return;
-      }
-      if (parsed.error === "no_phone_col") {
-        errors.innerHTML = `<p class="error">Не нашли столбец с телефоном</p>
-          <p class="hint">Назовите столбец Number, phone или Телефон</p>`;
-        return;
-      }
-      if (!parsed.good.length) {
-        errors.innerHTML = `<p class="error">Непонятный телефон — строка не в обзвоне</p>
-          <p class="hint">Нужен российский номер: 8…, 7… или +7…</p>`;
-        return;
-      }
-
-      if (parsed.bad) {
-        errors.innerHTML = `<p class="error">Непонятный телефон — строка не в обзвоне</p>
-          <p class="error">${parsed.bad} строк с ошибкой телефона не загрузили</p>
-          <p class="hint">Нужен российский номер: 8…, 7… или +7…</p>`;
-      }
-
-      const newCols = parsed.columns || [];
-      const had = camp.columns || [];
-      const brandNew = newCols.filter((c) => !had.includes(c));
-      camp.columns = [...new Set([...had, ...newCols])];
-      const good = parsed.good;
-
-      if (camp.contacts?.length) {
-        showReloadPrecheck(camp, good, brandNew);
-        return;
-      }
-
-      if (brandNew.length && had.length) {
-        showNewColumnAlert(camp, good, brandNew);
-        return;
-      }
-
-      camp.uploadWarnings = [];
-      const needed = [...(camp.scenarioText || "").matchAll(/\{([^}]+)\}/g)].map((m) => m[1]);
-      for (const key of needed) {
-        if (/^(имя|name)$/i.test(key)) continue;
-        if (!camp.columns.includes(key) && !newCols.includes(key)) {
-          camp.uploadWarnings.push(`Нет столбца «${key}» в файле`);
-        }
-      }
-      camp.contacts = good;
-      persistCampaigns();
-      ok.hidden = false;
-      ok.textContent = "Контакты загружены";
-      render();
-    })
-    .catch((err) => {
-      progress.hidden = true;
-      hint.hidden = true;
-      const code = err?.message;
-      if (code === "xlsx_lib") {
-        errors.innerHTML = `<p class="error">Не удалось прочитать Excel. Проверьте сеть или сохраните файл как CSV</p>`;
-      } else if (code === "format") {
-        errors.innerHTML = `<p class="error">Нужен файл Excel или CSV</p>`;
-      } else {
-        errors.innerHTML = `<p class="error">Не удалось прочитать файл</p>`;
-      }
-    });
+  try {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const result = await apiFetch(
+      `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/upload`,
+      { method: "POST", session: state.session, body: fd }
+    );
+    progress.hidden = true;
+    hint.hidden = true;
+    const rejected = result?.rejected || [];
+    const warnings = result?.warnings || [];
+    if (rejected.length) {
+      errors.innerHTML = rejected
+        .slice(0, 8)
+        .map(
+          (r) =>
+            `<p class="error">${escapeHtml(typeof r === "string" ? r : r.reason || r.code || "Строка отклонена")}</p>`
+        )
+        .join("");
+    }
+    if (warnings.length) {
+      camp.uploadWarnings = warnings.map((w) => (typeof w === "string" ? w : w.message || String(w)));
+    }
+    await refreshCampaignContacts(camp);
+    ok.hidden = false;
+    ok.textContent =
+      result?.accepted != null ? `Контакты загружены: ${result.accepted}` : "Контакты загружены";
+    render();
+  } catch (ex) {
+    progress.hidden = true;
+    hint.hidden = true;
+    const code = ex?.code;
+    if (code === "unsupported_format") {
+      errors.innerHTML = `<p class="error">Нужен файл CSV (Excel пока не принимаем)</p>`;
+    } else if (code === "file_too_large") {
+      errors.innerHTML = `<p class="error">Файл слишком большой</p>`;
+    } else if (code === "missing_columns") {
+      errors.innerHTML = `<p class="error">Не нашли нужные колонки</p>
+        <p class="hint">Нужен столбец с телефоном</p>`;
+    } else {
+      errors.innerHTML = `<p class="error">${escapeHtml(errorMessage(code))}</p>`;
+    }
+  }
 }
 
 function showNewColumnAlert(camp, good, brandNew) {
@@ -2505,52 +3259,82 @@ function bindLaunch() {
 
   const start = document.getElementById("dial-start");
   if (start) {
-    start.onclick = () => {
+    start.onclick = async () => {
       if (locked() || launchBlockReasons(camp).length) return;
       const prog = document.getElementById("dial-progress");
-      if (prog) prog.hidden = false;
-      setTimeout(() => {
+      if (prog) {
+        prog.hidden = false;
+        prog.textContent = hasApi() ? "Запускаем…" : "Нужен адрес API";
+      }
+      if (!hasApi()) {
+        flash("Укажите адрес API (CALLMATE_API_BASE), чтобы начать обзвон");
+        if (prog) prog.hidden = true;
+        return;
+      }
+      try {
+        await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/start`, {
+          method: "POST",
+          session: state.session,
+        });
         camp.dial_state = "running";
-        for (const ct of camp.contacts || []) {
-          if (!ct.attempts?.length) {
-            ct.status = STATUS.in_progress;
-            ct.attempts = [{ when: new Date().toISOString().slice(0, 16).replace("T", " "), outcome: "no_pickup" }];
-          }
-        }
-        if (camp.contacts?.[0]) {
-          camp.contacts[0].status = STATUS.done;
-          camp.contacts[0].verdict = "Дошли до цели";
-          camp.contacts[0].attempts = [
-            { when: new Date().toISOString().slice(0, 16).replace("T", " "), outcome: "connected" },
-          ];
-          camp.contacts[0].transcript = "Краткий текст разговора (демо)";
-        }
-        camp.analytics = {
-          calls: camp.contacts?.length || 0,
-          avgDuration: "0:42",
-          goalReached: 1,
-          minutes: 3,
-          cost: 3 * state.companyTariff,
-        };
+        // Do not invent contact outcomes locally — server/worker owns dial.
         persistCampaigns();
+        flash("Обзвон поставлен в работу. Набор по очереди — следующий этап");
+        ensureDialStatePoll();
         render();
-      }, 400);
+      } catch (err) {
+        flash(errorMessage(err?.code), "error");
+        if (prog) prog.hidden = true;
+      }
     };
   }
   const pause = document.getElementById("dial-pause");
   if (pause) {
-    pause.onclick = () => {
-      camp.dial_state = "paused";
-      persistCampaigns();
-      render();
+    pause.onclick = async () => {
+      if (!hasApi()) {
+        flash("Укажите адрес API");
+        return;
+      }
+      const prog = document.getElementById("dial-progress");
+      if (prog) {
+        prog.hidden = false;
+        prog.textContent = "Ставим на паузу…";
+      }
+      try {
+        const res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/pause`, {
+          method: "POST",
+          session: state.session,
+        });
+        camp.dial_state = res.dial_state || "paused";
+        persistCampaigns();
+        flash("На паузе. Текущий разговор закончим. Новые звонки не начнём");
+        ensureDialStatePoll();
+        render();
+      } catch (err) {
+        flash(errorMessage(err?.code) || "Не удалось поставить на паузу", "error");
+        if (prog) prog.hidden = true;
+      }
     };
   }
   const resume = document.getElementById("dial-resume");
   if (resume) {
-    resume.onclick = () => {
-      camp.dial_state = "running";
-      persistCampaigns();
-      render();
+    resume.onclick = async () => {
+      if (!hasApi()) {
+        flash("Укажите адрес API");
+        return;
+      }
+      try {
+        const res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/resume`, {
+          method: "POST",
+          session: state.session,
+        });
+        camp.dial_state = res.dial_state || "running";
+        persistCampaigns();
+        ensureDialStatePoll();
+        render();
+      } catch (err) {
+        flash(errorMessage(err?.code) || "Не удалось продолжить", "error");
+      }
     };
   }
   const stop = document.getElementById("dial-stop");
@@ -2561,10 +3345,29 @@ function bindLaunch() {
   }
   const stopYes = document.getElementById("stop-yes");
   if (stopYes) {
-    stopYes.onclick = () => {
-      camp.dial_state = "stopped";
-      persistCampaigns();
-      render();
+    stopYes.onclick = async () => {
+      if (!hasApi()) {
+        flash("Укажите адрес API");
+        return;
+      }
+      const prog = document.getElementById("dial-progress");
+      if (prog) {
+        prog.hidden = false;
+        prog.textContent = "Останавливаем…";
+      }
+      try {
+        const res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/stop`, {
+          method: "POST",
+          session: state.session,
+        });
+        camp.dial_state = res.dial_state || "stopped";
+        persistCampaigns();
+        flash("Остановлен. Текущий разговор договорим");
+        render();
+      } catch (err) {
+        flash(errorMessage(err?.code) || "Не удалось остановить", "error");
+        if (prog) prog.hidden = true;
+      }
     };
   }
   const stopNo = document.getElementById("stop-no");
@@ -2572,13 +3375,41 @@ function bindLaunch() {
     stopNo.onclick = () => {
       document.getElementById("stop-confirm").hidden = true;
     };
+  if (camp.dial_state === "running" || camp.dial_state === "paused") {
+    ensureDialStatePoll();
+  }
 }
 
 function bindStatuses() {
   document.querySelectorAll("[data-expand-status]").forEach((btn) => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       const key = btn.getAttribute("data-expand-status");
       state.ui.statusExpandKey = state.ui.statusExpandKey === key ? null : key;
+      const camp = workspaceCampaign() || activeCampaign();
+      if (hasApi() && camp && state.ui.statusExpandKey) {
+        const phone = String(key || "").split("|").slice(1).join("|");
+        const ct = (camp.contacts || []).find((c) => c.phone === phone || `${camp.id}|${c.phone}` === key);
+        if (ct?.id) {
+          try {
+            const card = await apiFetch(
+              `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}`,
+              { session: state.session }
+            );
+            Object.assign(ct, {
+              status: card.status || ct.status,
+              verdict: card.verdict ?? null,
+              attrs: card.attrs || ct.attrs,
+              attempt_count: card.attempt_count ?? ct.attempt_count,
+              attempts: card.attempts || ct.attempts || [],
+              last_transcript: card.last_transcript ?? ct.last_transcript,
+              transcript: card.last_transcript || card.transcript || ct.transcript,
+            });
+            persistCampaigns();
+          } catch (ex) {
+            flash(errorMessage(ex?.code), "error");
+          }
+        }
+      }
       render();
     };
   });
@@ -2590,9 +3421,33 @@ function bindStatuses() {
     };
   }
   document.querySelectorAll("[data-contact-filter]").forEach((btn) => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       const next = btn.getAttribute("data-contact-filter") || "all";
       state.ui.contactStatusFilter = next;
+      const camp = workspaceCampaign() || activeCampaign();
+      if (hasApi() && camp) {
+        try {
+          const q =
+            next && next !== "all"
+              ? `?status=${encodeURIComponent(STATUS[next] || next)}`
+              : "";
+          const data = await apiFetch(
+            `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts${q}`,
+            { session: state.session }
+          );
+          camp.contacts = (data?.items || []).map((item) => ({
+            id: item.id,
+            phone: item.phone,
+            status: item.status || STATUS.in_progress,
+            attrs: item.attrs || {},
+            verdict: item.verdict ?? null,
+            attempts: item.attempts || [],
+          }));
+          persistCampaigns();
+        } catch (ex) {
+          flash(errorMessage(ex?.code), "error");
+        }
+      }
       render();
     };
   });
@@ -2601,24 +3456,70 @@ function bindStatuses() {
 function bindAnalytics() {
   const btn = document.getElementById("export-excel");
   if (!btn) return;
-  btn.onclick = () => {
+  btn.onclick = async () => {
+    const camp = activeCampaign();
     const st = document.getElementById("export-status");
     const err = document.getElementById("export-error");
-    err.hidden = true;
-    st.hidden = false;
-    st.textContent = "Готовим файл…";
+    if (err) err.hidden = true;
+    if (st) {
+      st.hidden = false;
+      st.textContent = "Готовим файл…";
+    }
     btn.disabled = true;
-    setTimeout(() => {
-      st.textContent = "";
-      st.hidden = true;
-      btn.disabled = false;
-      const blob = new Blob(["campaign,minutes,cost\n"], { type: "text/csv" });
+    try {
+      if (!hasApi() || !camp) {
+        throw Object.assign(new Error("api_not_configured"), { code: "api_not_configured" });
+      }
+      const res = await apiFetch(
+        `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/analytics/export.xlsx`,
+        { session: state.session }
+      );
+      const blob = res instanceof Response ? await res.blob() : res;
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = "analytics.csv";
       a.click();
-    }, 700);
+      if (st) {
+        st.textContent = "";
+        st.hidden = true;
+      }
+    } catch (ex) {
+      if (err) {
+        err.hidden = false;
+        err.textContent = errorMessage(ex?.code);
+      } else {
+        flash(errorMessage(ex?.code), "error");
+      }
+      if (st) st.hidden = true;
+    } finally {
+      btn.disabled = false;
+    }
   };
+}
+
+function applySessionPayload(data) {
+  state.session = data.session || state.session;
+  state.role = data.role || "";
+  state.companyLocked = Boolean(data.company_locked);
+  if (data.impersonated_company_id) {
+    state.impersonate = { companyId: data.impersonated_company_id };
+    localStorage.setItem("cm_impersonate", JSON.stringify(state.impersonate));
+  }
+  localStorage.setItem("cm_session", state.session);
+  localStorage.setItem("cm_role", state.role);
+  localStorage.setItem("cm_locked", state.companyLocked ? "1" : "0");
+}
+
+async function restoreSession() {
+  if (!hasApi() || !state.session) return;
+  try {
+    const data = await fetchSession(state.session);
+    applySessionPayload({ ...data, session: state.session });
+  } catch (e) {
+    if (e?.code === "invalid_session" || e?.status === 401) {
+      clearSession();
+    }
+  }
 }
 
 function clearSession() {
@@ -2626,6 +3527,9 @@ function clearSession() {
   state.role = "";
   state.companyLocked = false;
   state.impersonate = null;
+  state.ui.adminLoaded = false;
+  state.ui.telephonyLoaded = false;
+  state.ui.campaignsLoaded = false;
   localStorage.removeItem("cm_session");
   localStorage.removeItem("cm_role");
   localStorage.removeItem("cm_locked");
@@ -2655,17 +3559,12 @@ function bindLogin() {
     submit.disabled = true;
     try {
       const data = await apiLogin(loginName, password);
-      state.session = data.session;
-      state.role = data.role;
-      state.companyLocked = Boolean(data.company_locked);
-      localStorage.setItem("cm_session", data.session);
-      localStorage.setItem("cm_role", data.role);
-      localStorage.setItem("cm_locked", state.companyLocked ? "1" : "0");
+      applySessionPayload(data);
       navigate(data.role === "superadmin" ? "/admin" : "/cabinet/campaigns");
-    } catch {
+    } catch (e) {
       document.getElementById("password").value = "";
       err.hidden = false;
-      err.textContent = ERROR_BY_CODE.auth_failed;
+      err.textContent = errorMessage(e?.code || "invalid_credentials");
     } finally {
       submit.textContent = "Войти";
       submit.disabled = false;
@@ -2682,4 +3581,4 @@ function escapeHtml(s) {
 }
 
 window.addEventListener("hashchange", render);
-render();
+restoreSession().finally(() => render());
