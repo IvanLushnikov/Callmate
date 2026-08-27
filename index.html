@@ -15,8 +15,8 @@
   <body>
     <div id="app"></div>
     <script>
-      // Optional: set before module load, e.g. from static host config.
-      // window.CALLMATE_API_BASE = "http://127.0.0.1:8080";
+      // Public API on Render (HTTPS). Override locally if needed.
+      window.CALLMATE_API_BASE = "https://callmate-api.onrender.com";
     </script>
     <script type="module" src="./src/app.js?v=18"></script>
   </body>
