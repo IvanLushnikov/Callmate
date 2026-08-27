@@ -3439,6 +3439,10 @@ async function uploadContactsFile(file) {
     );
     progress.hidden = true;
     hint.hidden = true;
+    if (result?.mode === "draft") {
+      showServerReloadDraft(camp, result);
+      return;
+    }
     const rejected = result?.rejected || [];
     const warnings = result?.warnings || [];
     if (rejected.length) {
@@ -3473,6 +3477,92 @@ async function uploadContactsFile(file) {
       errors.innerHTML = `<p class="error">${escapeHtml(errorMessage(code))}</p>`;
     }
   }
+}
+
+function showServerReloadDraft(camp, draft) {
+  const box = document.getElementById("reload-precheck");
+  const newColBox = document.getElementById("new-col-alert");
+  if (!box) return;
+  const draftId = draft.draft_id;
+  const action = draft.action || "confirm";
+  const newColumns = draft.new_columns || [];
+  const dupCount = draft.duplicates ?? 0;
+  const accepted = draft.accepted ?? 0;
+
+  async function cancelDraft() {
+    try {
+      if (draftId) {
+        await apiFetch(
+          `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/drafts/${encodeURIComponent(draftId)}/cancel`,
+          { method: "POST", session: state.session }
+        );
+      }
+    } catch (ex) {
+      flash(errorMessage(ex?.code), "error");
+    }
+    box.hidden = true;
+    if (newColBox) newColBox.hidden = true;
+    flash("Догрузка отменена — в кампанию ничего не добавили");
+  }
+
+  async function confirmDraft({ addFields = false } = {}) {
+    try {
+      const res = await apiFetch(
+        `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/drafts/${encodeURIComponent(draftId)}/confirm`,
+        {
+          method: "POST",
+          session: state.session,
+          body: addFields ? { add_fields: true } : {},
+        }
+      );
+      await refreshCampaignContacts(camp);
+      box.hidden = true;
+      if (newColBox) newColBox.hidden = true;
+      flash(
+        res?.accepted != null ? `Догрузка принята: ${res.accepted}` : "Догрузка принята"
+      );
+      render();
+    } catch (ex) {
+      flash(errorMessage(ex?.code), "error");
+    }
+  }
+
+  if (action === "cancel_only") {
+    if (newColBox) {
+      newColBox.hidden = false;
+      newColBox.innerHTML = `<p><strong>В новой порции есть поле, которого не было у старых номеров</strong></p>
+       <p class="hint">${escapeHtml(newColumns.join(", "))}</p>
+       <p class="hint">После старта новое поле в сценарий не добавить — отмените догрузку или подготовьте файл без новых полей</p>
+       <button class="btn secondary" type="button" id="newcol-cancel">Отменить</button>`;
+      document.getElementById("newcol-cancel").onclick = cancelDraft;
+    }
+    box.hidden = true;
+    return;
+  }
+
+  if (action === "add_field_or_cancel" && newColumns.length) {
+    if (newColBox) {
+      newColBox.hidden = false;
+      newColBox.innerHTML = `<p><strong>В файле новое поле</strong></p>
+       <p class="hint">${escapeHtml(newColumns.join(", "))}</p>
+       <button class="btn secondary" type="button" id="newcol-cancel">Отменить</button>
+       <button class="btn" type="button" id="newcol-add">Добавить поле в сценарий и подтвердить</button>`;
+      document.getElementById("newcol-cancel").onclick = cancelDraft;
+      document.getElementById("newcol-add").onclick = () => confirmDraft({ addFields: true });
+    }
+    box.hidden = true;
+    return;
+  }
+
+  box.hidden = false;
+  box.innerHTML = `<h4>Предпроверка</h4>
+    <p class="hint">Покажите расхождения до подтверждения</p>
+    <p>К догрузке: ${escapeHtml(String(accepted))} · обновление у уже загруженных: ${escapeHtml(String(dupCount))}</p>
+    <p class="hint">Тот же телефон — не второй контакт, а обновление полей. Пока не подтвердите — в обзвон не попадёт</p>
+    <button class="btn" type="button" id="reload-confirm">Подтвердить догрузку</button>
+    <button class="btn secondary" type="button" id="reload-cancel">Отменить</button>`;
+  document.getElementById("reload-cancel").onclick = cancelDraft;
+  document.getElementById("reload-confirm").onclick = () => confirmDraft();
 }
 
 function showNewColumnAlert(camp, good, brandNew) {
