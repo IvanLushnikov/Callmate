@@ -268,7 +268,10 @@ function isWeakScenario(camp) {
   const goal = (camp?.goal || "").trim();
   const details = (camp?.details || "").trim();
   const greeting = (camp?.preview?.greeting || "").trim();
-  return !goal || details.length < 8 || !greeting;
+  const says = (camp?.preview?.says || "").trim();
+  const replies = (camp?.preview?.replies || "").trim();
+  const tone = (camp?.preview?.tone || "").trim();
+  return !goal || details.length < 8 || !greeting || !says || !replies || !tone;
 }
 
 function flash(msg, kind = "ok") {
