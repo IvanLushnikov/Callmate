@@ -1317,7 +1317,9 @@ button.ready-meta-item:hover {
   margin: 0;
   font-size: 0.78rem;
   line-height: 1.4;
-  max-width: 42rem;
+  color: var(--muted);
+  max-width: 40rem;
+  order: 2;
 }
 
 .contacts-list-block {
