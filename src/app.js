@@ -1096,17 +1096,23 @@ function maskPhone(phone) {
 
 function loginView() {
   return `<div class="login-wrap">
-    <form class="panel" id="login-form">
-      <p class="brand">CallMate</p>
-      <h1>Вход</h1>
-      <label for="login">Логин</label>
-      <input id="login" name="login" autocomplete="username" placeholder="Ваш логин" />
-      <label for="password">Пароль</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Пароль" />
-      <button class="btn" id="submit" type="submit">Войти</button>
-      <div class="error" id="form-error" hidden></div>
-      <p class="hint desktop-note">Удобнее на компьютере. Телефонную вёрстку сделаем позже</p>
-    </form>
+    <section class="login-hero" aria-label="CallMate">
+      <p class="login-brand">CallMate</p>
+      <p class="login-lead">Кабинет голосовых кампаний</p>
+    </section>
+    <aside class="login-aside">
+      <form class="panel" id="login-form">
+        <h1>Вход</h1>
+        <p class="hint">В кабинет компании или в админку</p>
+        <label for="login">Логин</label>
+        <input id="login" name="login" autocomplete="username" placeholder="Ваш логин" />
+        <label for="password">Пароль</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Пароль" />
+        <button class="btn" id="submit" type="submit">Войти</button>
+        <div class="error" id="form-error" hidden></div>
+        <p class="hint desktop-note">Удобнее на компьютере. Телефонную вёрстку сделаем позже</p>
+      </form>
+    </aside>
   </div>`;
 }
 
@@ -1117,12 +1123,18 @@ function forbiddenView() {
   } else if (state.session && state.role === "superadmin") {
     action = `<button class="btn" id="forbidden-action" type="button">К компаниям</button>`;
   }
-  return `<div class="login-wrap"><div class="panel">
-    <h1>Нет доступа</h1>
-    <p>У вас нет доступа к этой странице</p>
-    ${action}
-    <button class="btn secondary" id="forbidden-logout" type="button">Выйти</button>
-  </div></div>`;
+  return `<div class="login-wrap">
+    <section class="login-hero" aria-label="CallMate">
+      <p class="login-brand">CallMate</p>
+      <p class="login-lead">Нужен другой доступ — вернитесь ко входу.</p>
+    </section>
+    <aside class="login-aside"><div class="panel">
+      <h1>Нет доступа</h1>
+      <p class="hint">У вас нет доступа к этой странице</p>
+      ${action}
+      <button class="btn secondary" id="forbidden-logout" type="button">Выйти</button>
+    </div></aside>
+  </div>`;
 }
 
 /* ---------- render / bind ---------- */
