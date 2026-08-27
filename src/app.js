@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout } from "./api.js?v=11";
+import { login as apiLogin, logout as apiLogout } from "./api.js?v=12";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
