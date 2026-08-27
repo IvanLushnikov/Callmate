@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout } from "./api.js";
+import { login as apiLogin, logout as apiLogout } from "./api.js?v=10";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -614,7 +614,7 @@ function pageCampaignNew() {
       <div class="panel wide"><p class="hint">Аккаунт заблокирован</p></div>
     </section>`;
   }
-  return `<section class="flow-section" id="sec-campaign">
+  return `<section class="flow-section create-campaign" id="sec-campaign">
     <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
     <h2>Новая кампания</h2>
     ${newCampaignFormInline()}
@@ -817,16 +817,12 @@ function dialActionsHtml(camp) {
       ? reasons.length === 0 && !locked()
       : false;
   if (camp.dial_state === "running") {
-    return `<div class="row-actions workspace-actions">
-      <button class="btn" type="button" id="dial-pause" ${roAttr()}>Пауза</button>
-      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
-    </div>`;
+    return `<button class="btn" type="button" id="dial-pause" ${roAttr()}>Пауза</button>
+      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>`;
   }
   if (camp.dial_state === "paused") {
-    return `<div class="row-actions workspace-actions">
-      <button class="btn" type="button" id="dial-resume" ${roAttr()}>Продолжить</button>
-      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
-    </div>`;
+    return `<button class="btn" type="button" id="dial-resume" ${roAttr()}>Продолжить</button>
+      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>`;
   }
   const disabled = !canStart || locked();
   return `<button class="btn" type="button" id="dial-start" ${disabled ? "disabled" : ""}>Начать обзвон</button>
@@ -843,7 +839,7 @@ function campaignWorkspace(camp) {
         <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
         <span class="badge">${escapeHtml(dialLabel(camp.dial_state))}</span>
       </div>
-      ${dialActionsHtml(camp)}
+      <div class="workspace-actions">${dialActionsHtml(camp)}</div>
     </header>
     <div id="stop-confirm" class="panel nested" hidden>
       <p>Остановить обзвон? Текущий разговор договорим</p>
@@ -921,24 +917,23 @@ function blockBotPreview(camp, weak, started) {
         </div>`
           : ""
       }
+      <p class="hint preview-lead">Можно править каждый блок. Если имени нет — робот его не говорит</p>
       <div class="preview-edit-grid">
         <div class="preview-field">
           <label for="preview-greeting">Приветствие</label>
-          <textarea id="preview-greeting" rows="4" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
-          <p class="hint">Если имени нет — робот его не говорит</p>
+          <textarea id="preview-greeting" rows="3" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
         </div>
         <div class="preview-field">
           <label for="preview-says">Что говорит</label>
-          <textarea id="preview-says" rows="4" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
+          <textarea id="preview-says" rows="3" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
         </div>
         <div class="preview-field">
           <label for="preview-replies">Как отвечает</label>
-          <textarea id="preview-replies" rows="4" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
+          <textarea id="preview-replies" rows="3" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
         </div>
         <div class="preview-field">
           <label for="preview-tone">Тон</label>
-          <textarea id="preview-tone" rows="4" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
-          <p class="hint">Без давления оформить любой ценой</p>
+          <textarea id="preview-tone" rows="3" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
         </div>
       </div>
       ${
@@ -962,15 +957,14 @@ function blockNumbers(camp) {
 }
 
 function newCampaignFormInline() {
-  return `<form class="panel nested" id="new-campaign-form">
-    <h3>Новая кампания</h3>
+  return `<form class="panel wide create-campaign-form" id="new-campaign-form">
     <label>Название</label><input id="camp-name" ${roAttr()} />
     <p class="hint">Пустое имя — не мешает запуску</p>
     <label>Цель звонка</label>
     <input id="camp-goal" placeholder="Например: напомнить о записи" ${roAttr()} />
     <p class="hint">К чему должен привести разговор</p>
     <label>Сведения</label>
-    <textarea id="camp-details" rows="4" placeholder="Что важно сказать абоненту" ${roAttr()}></textarea>
+    <textarea id="camp-details" rows="5" placeholder="Что важно сказать абоненту" ${roAttr()}></textarea>
     <p class="hint">Что роботу знать о продукте и ситуации</p>
     <div class="error" id="camp-error" hidden></div>
     <div class="row-actions">
@@ -1076,10 +1070,12 @@ function sectionScenario(camp) {
         : [];
   const attrs = camp.columns || [];
   return `<section class="flow-section" id="sec-scenario">
-    <h2>Сценарий и этапы</h2>
+    <div class="section-head">
+      <h2>Сценарий и этапы</h2>
+      <p class="hint">Можно править текст; ветки рисовать не нужно</p>
+    </div>
     <div class="panel wide scenario-panel">
       ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
-      <p class="hint">Можно править текст; ветки диалога рисовать не нужно</p>
       <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
       ${
         stages.length
