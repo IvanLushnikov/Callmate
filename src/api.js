@@ -87,10 +87,14 @@ export async function login(loginName, password) {
 
 export async function logout(session) {
   if (!API_BASE || !session) return;
-  await fetch(`${API_BASE}/api/auth/logout`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
-  });
+  try {
+    await fetch(`${API_BASE}/api/auth/logout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
+    });
+  } catch {
+    /* best-effort: local clear must still succeed if API is asleep/unreachable */
+  }
 }
 
 export async function fetchSession(session) {

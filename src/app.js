@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=18";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=19";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -2019,10 +2019,8 @@ function bindForbidden() {
     else if (state.role === "superadmin") navigate("/admin");
     else navigate("/login");
   };
-  document.getElementById("forbidden-logout").onclick = async () => {
-    await apiLogout(state.session);
-    clearSession();
-    navigate("/login");
+  document.getElementById("forbidden-logout").onclick = () => {
+    void doLogout();
   };
 }
 
@@ -2067,10 +2065,8 @@ function bindShell() {
   });
   const logoutBtn = document.getElementById("logout");
   if (logoutBtn) {
-    logoutBtn.onclick = async () => {
-      await apiLogout(state.session);
-      clearSession();
-      navigate("/login");
+    logoutBtn.onclick = () => {
+      void doLogout();
     };
   }
   const exitImp = document.getElementById("exit-impersonate");
@@ -3534,6 +3530,14 @@ function clearSession() {
   localStorage.removeItem("cm_role");
   localStorage.removeItem("cm_locked");
   localStorage.removeItem("cm_impersonate");
+}
+
+/** Clear local session first so UI always leaves; server logout is best-effort. */
+async function doLogout() {
+  const token = state.session;
+  clearSession();
+  navigate("/login");
+  if (token) await apiLogout(token);
 }
 
 function bindLogin() {
