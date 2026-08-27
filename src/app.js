@@ -559,7 +559,7 @@ function pageCampaignList() {
   if (!state.campaigns.length) {
     return `<section class="flow-section" id="sec-campaign">
       <h2>Кампании</h2>
-      <div class="panel wide">
+      <div class="empty-state">
         <p>Создайте первую кампанию</p>
         ${createBtn}
       </div>
@@ -749,17 +749,21 @@ function campaignWorkspace(camp) {
   return `<div class="workspace" data-camp="${escapeHtml(camp.id)}">
     <header class="workspace-bar">
       <a class="back-link" href="#/cabinet/campaigns">← К кампаниям</a>
-      <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
-      <span class="badge">${escapeHtml(dialLabel(camp.dial_state))}</span>
+      <div class="workspace-heading">
+        <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
+        <span class="badge">${escapeHtml(dialLabel(camp.dial_state))}</span>
+      </div>
       ${dialActionsHtml(camp)}
     </header>
     <div id="stop-confirm" class="panel nested" hidden>
       <p>Остановить обзвон? Текущий разговор договорим</p>
-      <button class="btn" type="button" id="stop-yes">Стоп</button>
-      <button class="btn secondary" type="button" id="stop-no">Отмена</button>
+      <div class="row-actions">
+        <button class="btn" type="button" id="stop-yes">Стоп</button>
+        <button class="btn secondary" type="button" id="stop-no">Отмена</button>
+      </div>
     </div>
     ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
-    <p class="hint">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
+    <p class="hint meta-line">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
 
     <div class="workspace-grid">
       ${blockGoalContext(camp)}
