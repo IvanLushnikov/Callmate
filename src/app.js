@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=20";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=21";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -121,6 +121,8 @@ const state = {
     statusExpandKey: null,
     scheduleDrawerOpen: false,
     contactStatusFilter: "all",
+    generatePending: false,
+    generateError: null,
   },
   adminSettings: {
     batch_interval_sec: Number(localStorage.getItem("cm_interval") || "30"),
@@ -638,8 +640,43 @@ function mapCampaignFromApi(c, existing = {}) {
     retries: c.retries_max != null ? c.retries_max : existing.retries ?? 2,
     contacts: existing.contacts || [],
     columns: existing.columns || [],
-    preview: existing.preview || { greeting: "", says: "", replies: "", tone: "" },
+    preview: mapPreviewFromApi(c.preview, existing.preview),
   });
+}
+
+function mapPreviewFromApi(fromApi, existing) {
+  const fallback = existing || { greeting: "", says: "", replies: "", tone: "" };
+  if (!fromApi || typeof fromApi !== "object") return fallback;
+  return {
+    greeting: fromApi.greeting != null ? String(fromApi.greeting) : fallback.greeting || "",
+    says: fromApi.says != null ? String(fromApi.says) : fallback.says || "",
+    replies: fromApi.replies != null ? String(fromApi.replies) : fallback.replies || "",
+    tone: fromApi.tone != null ? String(fromApi.tone) : fallback.tone || "",
+  };
+}
+
+/** Display preview: with API — only server/local saved values; stub may invent defaults. */
+function previewForDisplay(camp) {
+  if (!hasApi()) return buildPreview(camp);
+  const p = camp.preview || {};
+  return {
+    goal: camp.goal || "",
+    details: camp.details || "",
+    greeting: (p.greeting || "").trim(),
+    says: (p.says || "").trim(),
+    replies: (p.replies || "").trim(),
+    tone: (p.tone || "").trim(),
+  };
+}
+
+function verdictsForDisplay(camp) {
+  if (camp.verdicts && camp.verdicts.length) return camp.verdicts;
+  if (!hasApi()) return ensureVerdicts(camp);
+  return [];
+}
+
+function isGenerateErrorCode(code) {
+  return code === "generate_failed" || code === "provider_down" || code === "weak_goal";
 }
 
 async function refreshCampaigns() {
@@ -1154,11 +1191,14 @@ function campaignWorkspace(camp) {
 }
 
 function blockBotPreview(camp, weak, started) {
-  const preview = buildPreview(camp);
-  const dis = started || locked() ? "disabled" : "";
+  const preview = previewForDisplay(camp);
+  const dis = started || locked() || state.ui.generatePending ? "disabled" : "";
   const goalVal = camp.goal || preview.goal || "";
   const detailsVal = camp.details || preview.details || "";
-  const verdicts = ensureVerdicts(camp);
+  const verdicts = verdictsForDisplay(camp);
+  const hasServerPreview = Boolean(preview.greeting || preview.says || preview.replies || preview.tone);
+  const pending = state.ui.generatePending;
+  const genErr = state.ui.generateError;
   return `<section class="flow-section" id="sec-preview">
     <h2>Робот так понял сценарий</h2>
     <form class="panel wide preview-panel" id="preview-form">
@@ -1169,6 +1209,17 @@ function blockBotPreview(camp, weak, started) {
           <strong>Сценарий пока слишком слабый для обзвона</strong>
           <p class="hint">Допишите цель и сведения или поправьте текст ниже</p>
         </div>`
+          : ""
+      }
+      ${pending ? `<div class="banner" id="generate-pending"><strong>Собираем сценарий…</strong></div>` : ""}
+      ${
+        genErr && !pending
+          ? `<div class="banner banner-danger" id="generate-error"><strong>${escapeHtml(genErr)}</strong></div>`
+          : ""
+      }
+      ${
+        !hasServerPreview && !pending && !started
+          ? `<p class="hint" id="preview-empty">Сначала сохраните цель и сведения — тогда появится, как робот понял сценарий.</p>`
           : ""
       }
       <p class="hint preview-lead">Можно править каждый блок. Если имени нет — робот его не говорит</p>
@@ -1189,7 +1240,7 @@ function blockBotPreview(camp, weak, started) {
             <div class="preview-field preview-field-full">
               <label for="preview-details">Сведения</label>
               <textarea id="preview-details" rows="5" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
-              <p class="hint">Что роботу знать о продукте и ситуации</p>
+              <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
             </div>
           </div>
           <aside class="goal-verdicts preview-verdicts">
@@ -1197,8 +1248,8 @@ function blockBotPreview(camp, weak, started) {
             <p class="hint">Система собрала список по цели. Менять его нельзя</p>
             ${
               verdicts.length
-                ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(v)}</li>`).join("")}</ul>`
-                : `<p class="hint">Пока нет итогов — уточните цель и соберите сценарий снова</p>`
+                ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(typeof v === "string" ? v : v.label || v.id || JSON.stringify(v))}</li>`).join("")}</ul>`
+                : `<p class="hint">Пока нет итогов — сохраните цель и сведения</p>`
             }
           </aside>
         </div>
@@ -1207,19 +1258,19 @@ function blockBotPreview(camp, weak, started) {
           <div class="preview-edit-grid">
             <div class="preview-field">
               <label for="preview-greeting">Приветствие</label>
-              <textarea id="preview-greeting" rows="4" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
+              <textarea id="preview-greeting" rows="4" ${dis} placeholder="Здравствуйте!">${escapeHtml(preview.greeting)}</textarea>
             </div>
             <div class="preview-field">
               <label for="preview-says">Что говорит</label>
-              <textarea id="preview-says" rows="4" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
+              <textarea id="preview-says" rows="4" ${dis} placeholder="Суть сообщения">${escapeHtml(preview.says)}</textarea>
             </div>
             <div class="preview-field">
               <label for="preview-replies">Как отвечает</label>
-              <textarea id="preview-replies" rows="5" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
+              <textarea id="preview-replies" rows="5" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(preview.replies)}</textarea>
             </div>
             <div class="preview-field">
               <label for="preview-tone">Тон</label>
-              <textarea id="preview-tone" rows="4" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
+              <textarea id="preview-tone" rows="4" ${dis} placeholder="Спокойно и по делу">${escapeHtml(preview.tone)}</textarea>
               <p class="hint">Без давления оформить любой ценой</p>
             </div>
           </div>
@@ -1229,8 +1280,9 @@ function blockBotPreview(camp, weak, started) {
         started || locked()
           ? `<p class="hint">${started ? "После старта превью только смотрим" : "Аккаунт заблокирован — правки недоступны"}</p>`
           : `<div class="row-actions">
-              <button class="btn" type="submit">Сохранить превью</button>
-              <p class="hint ok-line" id="preview-ok" hidden>Превью сохранено</p>
+              <button class="btn" type="submit" id="preview-save-btn" ${pending ? "disabled" : ""}>Сохранить</button>
+              <p class="hint">Сохранение цели и сведений заново соберёт, как звучит робот, и этапы.</p>
+              <p class="hint ok-line" id="preview-ok" hidden>Сценарий собран</p>
             </div>`
       }
     </form>
@@ -1246,18 +1298,20 @@ function blockNumbers(camp) {
 }
 
 function newCampaignFormInline() {
+  const pending = state.ui.generatePending;
   return `<form class="panel wide create-campaign-form" id="new-campaign-form">
-    <label>Название</label><input id="camp-name" ${roAttr()} />
+    <label>Название</label><input id="camp-name" ${roAttr()} ${pending ? "disabled" : ""} />
     <p class="hint">Пустое имя — не мешает запуску</p>
     <label>Цель звонка</label>
-    <input id="camp-goal" placeholder="Например: напомнить о записи" ${roAttr()} />
+    <input id="camp-goal" placeholder="Например: напомнить о записи" ${roAttr()} ${pending ? "disabled" : ""} />
     <p class="hint">К чему должен привести разговор</p>
     <label>Сведения</label>
-    <textarea id="camp-details" rows="5" placeholder="Что важно сказать абоненту" ${roAttr()}></textarea>
-    <p class="hint">Что роботу знать о продукте и ситуации</p>
+    <textarea id="camp-details" rows="5" placeholder="Что важно сказать абоненту" ${roAttr()} ${pending ? "disabled" : ""}></textarea>
+    <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
     <div class="error" id="camp-error" hidden></div>
+    ${pending ? `<p class="hint" id="camp-generate-pending"><strong>Собираем сценарий…</strong></p>` : ""}
     <div class="row-actions">
-      <button class="btn" type="submit" ${roAttr()}>Сохранить</button>
+      <button class="btn" type="submit" ${roAttr()} ${pending ? "disabled" : ""}>Сохранить</button>
       <a class="btn secondary" href="#/cabinet/campaigns" id="cancel-new-campaign" style="display:inline-block">Отмена</a>
     </div>
   </form>`;
@@ -2465,14 +2519,10 @@ function bindCampaignForms() {
     previewForm.onsubmit = async (e) => {
       e.preventDefault();
       const camp = workspaceCampaign();
-      if (!camp || isStarted(camp) || locked()) return;
+      if (!camp || isStarted(camp) || locked() || state.ui.generatePending) return;
       const name = document.getElementById("preview-name")?.value.trim() ?? camp.name ?? "";
       const goal = document.getElementById("preview-goal").value.trim();
       const details = document.getElementById("preview-details").value.trim();
-      const greeting = document.getElementById("preview-greeting").value.trim();
-      const says = document.getElementById("preview-says").value.trim();
-      const replies = document.getElementById("preview-replies").value.trim();
-      const tone = document.getElementById("preview-tone").value.trim();
       if (!goal) {
         flash("Опишите цель звонка", "error");
         return;
@@ -2481,32 +2531,39 @@ function bindCampaignForms() {
         flash("Допишите сведения", "error");
         return;
       }
-      if (!greeting || !says || !replies || !tone) {
-        flash("Заполните все блоки превью", "error");
-        return;
-      }
       camp.name = name;
       camp.goal = goal;
       camp.details = details;
-      camp.verdicts = ensureVerdicts(camp);
-      camp.preview = { greeting, says, replies, tone };
-      if (!camp.scenarioText) camp.scenarioText = says;
+      state.ui.generateError = null;
       try {
         if (hasApi()) {
+          state.ui.generatePending = true;
+          render();
           const updated = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}`, {
             method: "PATCH",
             session: state.session,
             body: { goal, details },
           });
           Object.assign(camp, mapCampaignFromApi(updated, camp));
+          state.ui.generatePending = false;
+        } else {
+          camp.verdicts = ensureVerdicts(camp);
+          camp.preview = mergePreviewDefaults(camp);
+          if (!camp.scenarioText) camp.scenarioText = camp.preview.says;
         }
         persistCampaigns();
         const ok = document.getElementById("preview-ok");
         if (ok) ok.hidden = false;
-        flash("Превью сохранено");
+        flash(hasApi() ? "Сценарий собран" : "Превью сохранено");
         render();
       } catch (ex) {
-        flash(errorMessage(ex?.code), "error");
+        state.ui.generatePending = false;
+        const code = ex?.code;
+        if (isGenerateErrorCode(code)) {
+          state.ui.generateError = errorMessage(code);
+        }
+        flash(errorMessage(code), "error");
+        render();
       }
     };
   }
@@ -2515,7 +2572,7 @@ function bindCampaignForms() {
   if (newCampaignForm) {
     newCampaignForm.onsubmit = async (e) => {
       e.preventDefault();
-      if (locked()) return;
+      if (locked() || state.ui.generatePending) return;
       const goal = document.getElementById("camp-goal").value.trim();
       const err = document.getElementById("camp-error");
       if (!goal) {
@@ -2528,49 +2585,30 @@ function bindCampaignForms() {
       try {
         let camp;
         if (hasApi()) {
+          state.ui.generatePending = true;
+          state.ui.generateError = null;
+          render();
           const created = await apiFetch("/api/cabinet/campaigns", {
             method: "POST",
             session: state.session,
             body: { goal, details },
           });
-          camp = mapCampaignFromApi(created, {
-            name,
-            preview: {
-              greeting: "Здравствуйте!",
-              says: details || goal,
-              replies: "Отвечает коротко по сути вопроса",
-              tone: "Спокойно и по делу, без давления оформить любой ценой",
-            },
-            stages: [{ goal, input: "Приветствие", output: "Суть" }],
-            verdicts: ensureVerdicts({ goal }),
-            scenarioText: details,
-          });
-          if (camp.stages?.length) {
-            try {
-              await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
-                method: "PUT",
-                session: state.session,
-                body: {
-                  scenario_text: camp.scenarioText || details || goal,
-                  stages: camp.stages,
-                  verdicts: camp.verdicts,
-                },
-              });
-            } catch {
-              /* stages optional on create */
+          camp = mapCampaignFromApi(created, { name });
+          const generated = await apiFetch(
+            `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario/generate`,
+            {
+              method: "POST",
+              session: state.session,
             }
-          }
+          );
+          Object.assign(camp, mapCampaignFromApi(generated, camp));
+          state.ui.generatePending = false;
         } else {
           camp = emptyCampaign({
             name,
             goal,
             details,
-            preview: {
-              greeting: "Здравствуйте!",
-              says: details || goal,
-              replies: "Отвечает коротко по сути вопроса",
-              tone: "Спокойно и по делу, без давления оформить любой ценой",
-            },
+            preview: buildPreview({ goal, details, preview: {} }),
             scenarioText: details,
             stages: [{ goal, input: "Приветствие", output: "Суть" }],
             verdicts: ensureVerdicts({ goal }),
@@ -2580,11 +2618,13 @@ function bindCampaignForms() {
         persistCampaigns();
         setActiveCampaignId(camp.id);
         state.ui.showNewCampaign = false;
-        flash("Кампания создана");
+        flash(hasApi() ? "Кампания создана, сценарий собран" : "Кампания создана");
         navigate(`/cabinet/campaigns/${camp.id}`);
       } catch (ex) {
+        state.ui.generatePending = false;
         err.hidden = false;
         err.textContent = errorMessage(ex?.code);
+        render();
       }
     };
   }
