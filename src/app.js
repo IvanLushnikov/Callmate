@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout } from "./api.js?v=15";
+import { login as apiLogin, logout as apiLogout } from "./api.js?v=16";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -912,7 +912,6 @@ function campaignWorkspace(camp) {
     ${readinessStripHtml(camp)}
     ${scheduleDrawerHtml(camp)}
 
-    ${blockGoalContext(camp)}
     ${blockBotPreview(camp, weak, started)}
     ${blockNumbers(camp)}
     ${blockScenario(camp)}
@@ -924,51 +923,16 @@ function campaignWorkspace(camp) {
   </div>`;
 }
 
-function blockGoalContext(camp) {
-  const started = isStarted(camp);
-  const dis = started || locked() ? "disabled" : "";
-  const verdicts = ensureVerdicts(camp);
-  return `<section class="flow-section" id="sec-goal">
-    <h2>Цель и контекст</h2>
-    <form class="panel wide" id="goal-form">
-      ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
-      <div class="goal-layout">
-        <div class="goal-fields">
-          <label>Название</label>
-          <input id="camp-name-edit" value="${escapeHtml(camp.name || "")}" ${dis} />
-          <p class="hint">Пустое имя — не мешает запуску</p>
-          <label>Цель звонка</label>
-          <input id="camp-goal-edit" value="${escapeHtml(camp.goal || "")}" placeholder="Например: напомнить о записи" ${dis} />
-          <p class="hint">К чему должен привести разговор</p>
-          <label>Сведения</label>
-          <textarea id="camp-details-edit" rows="4" placeholder="Что важно сказать абоненту" ${dis}>${escapeHtml(camp.details || "")}</textarea>
-          <p class="hint">Что роботу знать о продукте и ситуации</p>
-          <div class="error" id="goal-error" hidden></div>
-          <p class="hint ok-line" id="goal-ok" hidden>Сохранено</p>
-        </div>
-        <aside class="goal-verdicts">
-          <h3>Возможные итоги разговора</h3>
-          <p class="hint">Система собрала список по цели. Менять его нельзя</p>
-          ${
-            verdicts.length
-              ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(v)}</li>`).join("")}</ul>`
-              : `<p class="hint">Пока нет итогов — уточните цель и соберите сценарий снова</p>`
-          }
-        </aside>
-      </div>
-      ${started ? "" : `<div class="goal-actions"><button class="btn" type="submit" ${dis}>Сохранить</button></div>`}
-    </form>
-  </section>`;
-}
-
 function blockBotPreview(camp, weak, started) {
   const preview = buildPreview(camp);
   const dis = started || locked() ? "disabled" : "";
   const goalVal = camp.goal || preview.goal || "";
   const detailsVal = camp.details || preview.details || "";
+  const verdicts = ensureVerdicts(camp);
   return `<section class="flow-section" id="sec-preview">
     <h2>Робот так понял сценарий</h2>
     <form class="panel wide preview-panel" id="preview-form">
+      ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
       ${
         weak && !started
           ? `<div class="banner banner-warn">
@@ -980,17 +944,33 @@ function blockBotPreview(camp, weak, started) {
       <p class="hint preview-lead">Можно править каждый блок. Если имени нет — робот его не говорит</p>
 
       <div class="preview-prompt">
-        <div class="preview-slice">
-          <div class="preview-field preview-field-full">
-            <label for="preview-goal">Цель звонка</label>
-            <textarea id="preview-goal" rows="2" ${dis} placeholder="Например: напомнить о записи">${escapeHtml(goalVal)}</textarea>
-            <p class="hint">К чему должен привести разговор</p>
+        <div class="preview-slice preview-slice-context">
+          <div class="preview-context-main">
+            <div class="preview-field preview-field-full">
+              <label for="preview-name">Название</label>
+              <input id="preview-name" value="${escapeHtml(camp.name || "")}" ${dis} />
+              <p class="hint">Пустое имя — не мешает запуску</p>
+            </div>
+            <div class="preview-field preview-field-full">
+              <label for="preview-goal">Цель звонка</label>
+              <textarea id="preview-goal" rows="2" ${dis} placeholder="Например: напомнить о записи">${escapeHtml(goalVal)}</textarea>
+              <p class="hint">К чему должен привести разговор</p>
+            </div>
+            <div class="preview-field preview-field-full">
+              <label for="preview-details">Сведения</label>
+              <textarea id="preview-details" rows="5" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
+              <p class="hint">Что роботу знать о продукте и ситуации</p>
+            </div>
           </div>
-          <div class="preview-field preview-field-full">
-            <label for="preview-details">Сведения</label>
-            <textarea id="preview-details" rows="5" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
-            <p class="hint">Что роботу знать о продукте и ситуации</p>
-          </div>
+          <aside class="goal-verdicts preview-verdicts">
+            <h3>Возможные итоги разговора</h3>
+            <p class="hint">Система собрала список по цели. Менять его нельзя</p>
+            ${
+              verdicts.length
+                ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(v)}</li>`).join("")}</ul>`
+                : `<p class="hint">Пока нет итогов — уточните цель и соберите сценарий снова</p>`
+            }
+          </aside>
         </div>
 
         <div class="preview-slice">
@@ -1970,39 +1950,13 @@ function bindAdminForms() {
 }
 
 function bindCampaignForms() {
-  const goalForm = document.getElementById("goal-form");
-  if (goalForm) {
-    goalForm.onsubmit = (e) => {
-      e.preventDefault();
-      const camp = workspaceCampaign();
-      if (!camp || isStarted(camp) || locked()) return;
-      const goal = document.getElementById("camp-goal-edit").value.trim();
-      const err = document.getElementById("goal-error");
-      const ok = document.getElementById("goal-ok");
-      if (!goal) {
-        err.hidden = false;
-        err.textContent = "Опишите цель звонка";
-        ok.hidden = true;
-        return;
-      }
-      camp.name = document.getElementById("camp-name-edit").value.trim();
-      camp.goal = goal;
-      camp.details = document.getElementById("camp-details-edit").value;
-      camp.verdicts = ensureVerdicts(camp);
-      camp.preview = mergePreviewDefaults(camp);
-      persistCampaigns();
-      err.hidden = true;
-      ok.hidden = false;
-      render();
-    };
-  }
-
   const previewForm = document.getElementById("preview-form");
   if (previewForm) {
     previewForm.onsubmit = (e) => {
       e.preventDefault();
       const camp = workspaceCampaign();
       if (!camp || isStarted(camp) || locked()) return;
+      const name = document.getElementById("preview-name")?.value.trim() ?? camp.name ?? "";
       const goal = document.getElementById("preview-goal").value.trim();
       const details = document.getElementById("preview-details").value.trim();
       const greeting = document.getElementById("preview-greeting").value.trim();
@@ -2021,6 +1975,7 @@ function bindCampaignForms() {
         flash("Заполните все блоки превью", "error");
         return;
       }
+      camp.name = name;
       camp.goal = goal;
       camp.details = details;
       camp.verdicts = ensureVerdicts(camp);
