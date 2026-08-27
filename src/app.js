@@ -3237,7 +3237,7 @@ async function uploadContactsFile(file) {
     hint.hidden = true;
     const code = ex?.code;
     if (code === "unsupported_format") {
-      errors.innerHTML = `<p class="error">Нужен файл CSV (Excel пока не принимаем)</p>`;
+      errors.innerHTML = `<p class="error">${escapeHtml(errorMessage("unsupported_format"))}</p>`;
     } else if (code === "file_too_large") {
       errors.innerHTML = `<p class="error">Файл слишком большой</p>`;
     } else if (code === "missing_columns") {
