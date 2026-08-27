@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout } from "./api.js?v=13";
+import { login as apiLogin, logout as apiLogout } from "./api.js?v=14";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -725,19 +725,58 @@ function contactCountsByStatus(contacts) {
   return counts;
 }
 
-function opsStripHtml(camp) {
+function reasonJumpTarget(reason) {
+  if (!reason) return null;
+  if (reason.action === "contacts") return "sec-contacts";
+  if (reason.action === "schedule") return "sec-schedule";
+  if (reason.action === "tel") return "integrations";
+  if (reason.weak) return "sec-preview";
+  if (reason.money) return "account";
+  return null;
+}
+
+function reasonLinkHtml(reason, { asButton = true } = {}) {
+  const jump = reasonJumpTarget(reason);
+  const text = escapeHtml(reason.text);
+  if (jump === "integrations") {
+    return `<a class="ready-reason" href="#/cabinet/integrations">${text}</a>`;
+  }
+  if (jump === "account") {
+    return `<a class="ready-reason" href="#/cabinet/account">${text}</a>`;
+  }
+  if (jump) {
+    return asButton
+      ? `<button type="button" class="ready-reason" data-jump="${escapeHtml(jump)}">${text}</button>`
+      : `<a class="ready-reason" href="#${escapeHtml(jump)}" data-jump="${escapeHtml(jump)}">${text}</a>`;
+  }
+  return `<span class="ready-reason ready-reason-static">${text}</span>`;
+}
+
+function reasonCtaHtml(reason) {
+  const jump = reasonJumpTarget(reason);
+  const text = escapeHtml(reason.text);
+  if (jump === "integrations") {
+    return `<a class="btn secondary ready-cta-btn" href="#/cabinet/integrations">${text}</a>`;
+  }
+  if (jump === "account") {
+    return `<a class="btn secondary ready-cta-btn" href="#/cabinet/account">${text}</a>`;
+  }
+  if (jump) {
+    return `<button type="button" class="btn secondary ready-cta-btn" data-jump="${escapeHtml(jump)}">${text}</button>`;
+  }
+  return `<span class="ready-reason ready-reason-static">${text}</span>`;
+}
+
+function readinessStripHtml(camp) {
   const t = state.telephony;
   const telOk = t.status === "ok" && !t.checking;
-  const telWarn = t.status === "error" || t.checking;
   const telLabel = t.checking
     ? "Проверяем…"
     : telOk
       ? "Подключена"
       : "Не подключена";
-  const telChipClass = telOk ? "status-chip-ok" : telWarn ? "status-chip-warn" : "status-chip-muted";
 
   const schOk = scheduleIsSet(camp);
-  const schChipClass = schOk ? "status-chip-ok" : "status-chip-muted";
   const schStatus = schOk ? "Настроено" : "Не задано";
   const schPreview = schOk ? scheduleSummaryLine(camp) : "Дни не заданы";
 
@@ -750,63 +789,67 @@ function opsStripHtml(camp) {
         .map(([k, v]) => `${STATUS_LABEL[STATUS[k]]} ${v}`)
         .join(" · ")
     : "";
-  const numbersChipClass = n ? "status-chip-ok" : "status-chip-muted";
+  const numbersValue = n
+    ? `${n}${countBits ? ` · ${countBits}` : ""}`
+    : "Загрузите контакты";
 
   const reasons = launchBlockReasons(camp);
   const canLaunch =
     (camp.dial_state === "draft" || camp.dial_state === "stopped") &&
     reasons.length === 0 &&
     !locked();
-  let launchTitle = "Готово к запуску";
-  let launchBody = "Можно начинать";
-  let launchChipClass = "status-chip-ok";
+
+  let readyTitle = "Готово";
+  let readyBody = `<p class="ready-hint">Можно начинать</p>`;
+  let readyClass = "ready-ok";
   if (camp.dial_state === "running") {
-    launchTitle = "Идёт обзвон";
-    launchBody = "Текущий разговор закончим. Новые звонки не начнём";
-    launchChipClass = "status-chip-ok";
+    readyTitle = "Идёт обзвон";
+    readyBody = `<p class="ready-hint">Текущий разговор закончим. Новые звонки не начнём</p>`;
+    readyClass = "ready-ok";
   } else if (camp.dial_state === "paused") {
-    launchTitle = "На паузе";
-    launchBody = "Текущий разговор закончим. Новые звонки не начнём";
-    launchChipClass = "status-chip-warn";
+    readyTitle = "На паузе";
+    readyBody = `<p class="ready-hint">Текущий разговор закончим. Новые звонки не начнём</p>`;
+    readyClass = "ready-warn";
   } else if (!canLaunch) {
-    launchTitle = "Нельзя запустить";
-    const top = reasons.slice(0, 3);
-    launchBody = top.length
-      ? `<p class="chip-reasons-inline">${top.map((r) => escapeHtml(r.text)).join(" · ")}</p>`
-      : "Нельзя запустить";
-    launchChipClass = "status-chip-warn";
+    readyTitle = "Нельзя";
+    const first = reasons[0];
+    const more = reasons.slice(1, 3);
+    readyBody = first
+      ? `<div class="ready-cta-wrap">
+          ${reasonCtaHtml(first)}
+          ${
+            more.length
+              ? `<div class="ready-reasons">${more.map((r) => reasonLinkHtml(r)).join("")}</div>`
+              : ""
+          }
+        </div>`
+      : `<p class="ready-hint">Нельзя запустить</p>`;
+    readyClass = "ready-warn";
   }
 
-  return `<div class="ops-strip" id="sec-ops">
-    <div class="status-chip ${telChipClass}" id="sec-telephony-summary">
-      <div class="status-chip-top">
-        <span class="status-chip-label">Телефония</span>
-        <span class="status-chip-state">${escapeHtml(telLabel)}</span>
+  return `<div class="ready-strip" id="sec-ops">
+    <div class="ready-main ${readyClass}" id="sec-launch">
+      <div class="ready-state">
+        <span class="ready-kicker">Запуск</span>
+        <strong class="ready-title">${escapeHtml(readyTitle)}</strong>
       </div>
-      <p class="status-chip-preview">${escapeHtml(telephonyStatusLine())}</p>
-      <a class="btn secondary status-chip-action" href="#/cabinet/integrations">Настроить</a>
+      <div class="ready-next">${readyBody}</div>
     </div>
-    <div class="status-chip ${schChipClass}" id="sec-schedule">
-      <div class="status-chip-top">
-        <span class="status-chip-label">Когда звоним</span>
-        <span class="status-chip-state">${escapeHtml(schStatus)}</span>
+    <div class="ready-meta">
+      <a class="ready-meta-item" href="#/cabinet/integrations" id="sec-telephony-summary">
+        <span class="ready-meta-label">Телефония</span>
+        <span class="ready-meta-value">${escapeHtml(telLabel)}</span>
+      </a>
+      <div class="ready-meta-wrap" id="sec-schedule">
+        <button class="ready-meta-item" type="button" id="schedule-open">
+          <span class="ready-meta-label">Когда звоним</span>
+          <span class="ready-meta-value">${escapeHtml(schOk ? schPreview : schStatus)}</span>
+        </button>
       </div>
-      <p class="status-chip-preview">${escapeHtml(schPreview)}</p>
-      <button class="btn secondary status-chip-action" type="button" id="schedule-open">Настроить</button>
-    </div>
-    <div class="status-chip ${numbersChipClass}" id="sec-ops-numbers">
-      <div class="status-chip-top">
-        <span class="status-chip-label">Номера</span>
-        <span class="status-chip-state">${escapeHtml(String(n))} ${n === 1 ? "номер" : "номеров"}</span>
-      </div>
-      <p class="status-chip-preview">${countBits ? escapeHtml(countBits) : "Загрузите контакты"}</p>
-    </div>
-    <div class="status-chip ${launchChipClass}" id="sec-launch">
-      <div class="status-chip-top">
-        <span class="status-chip-label">Запуск</span>
-        <span class="status-chip-state">${escapeHtml(launchTitle)}</span>
-      </div>
-      <div class="status-chip-preview">${launchBody}</div>
+      <button class="ready-meta-item" type="button" data-jump="sec-contacts" id="sec-ops-numbers">
+        <span class="ready-meta-label">Номера</span>
+        <span class="ready-meta-value">${escapeHtml(numbersValue)}</span>
+      </button>
     </div>
   </div>`;
 }
@@ -826,8 +869,15 @@ function dialActionsHtml(camp) {
       <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>`;
   }
   const disabled = !canStart || locked();
-  return `<button class="btn" type="button" id="dial-start" ${disabled ? "disabled" : ""}>Начать обзвон</button>
-    <p class="hint" id="dial-progress" hidden>Запускаем…</p>`;
+  const why =
+    disabled && reasons.length
+      ? `<div class="launch-why">${reasonLinkHtml(reasons[0])}</div>`
+      : "";
+  return `<div class="launch-cluster">
+      <button class="btn" type="button" id="dial-start" ${disabled ? "disabled" : ""}>Начать обзвон</button>
+      ${why}
+      <p class="hint" id="dial-progress" hidden>Запускаем…</p>
+    </div>`;
 }
 
 function campaignWorkspace(camp) {
@@ -838,7 +888,7 @@ function campaignWorkspace(camp) {
       <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
       <div class="workspace-heading">
         <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
-        <span class="badge">${escapeHtml(dialLabel(camp.dial_state))}</span>
+        <span class="badge badge-quiet">${escapeHtml(dialLabel(camp.dial_state))}</span>
       </div>
       <div class="workspace-actions">${dialActionsHtml(camp)}</div>
     </header>
@@ -852,13 +902,13 @@ function campaignWorkspace(camp) {
     ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
     <p class="hint meta-line">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
 
-    ${opsStripHtml(camp)}
+    ${readinessStripHtml(camp)}
     ${scheduleDrawerHtml(camp)}
 
     ${blockGoalContext(camp)}
     ${blockBotPreview(camp, weak, started)}
-    ${blockScenario(camp)}
     ${blockNumbers(camp)}
+    ${blockScenario(camp)}
 
     <section class="flow-section outcomes-section" id="sec-analytics">
       <h2>Итоги кампании</h2>
@@ -1178,19 +1228,13 @@ function sectionContacts(camp) {
             ${open ? `<tr class="expand-row"><td colspan="4">${contactDrawerHtml(camp, r)}</td></tr>` : ""}`;
         })
         .join("")
-    : contacts.length === 0
-      ? `<tr><td colspan="4"><p class="hint">Загрузите контакты</p></td></tr>`
-      : `<tr><td colspan="4"></td></tr>`;
+    : `<tr><td colspan="4"></td></tr>`;
 
-  return `<section class="flow-section" id="sec-contacts">
-    <h2>Номера</h2>
-    <div class="panel wide">
-      ${reloadHint}
-      <div class="upload-zone" id="upload-zone">
+  const uploadZone = `<div class="upload-zone${contacts.length ? " upload-zone-quiet" : " upload-zone-empty"}" id="upload-zone">
         <div class="upload-zone-main">
-          <p class="upload-zone-title">Перетащите файл или выберите на компьютере</p>
+          <p class="upload-zone-title">${contacts.length ? "Догрузить файл" : "Загрузите контакты"}</p>
           <p class="hint">Excel или CSV</p>
-          <button class="btn" type="button" id="pick-file" ${roAttr()}>Выбрать файл</button>
+          <button class="btn${contacts.length ? " secondary" : ""}" type="button" id="pick-file" ${roAttr()}>Выбрать файл</button>
           <input class="sr-file" type="file" id="contact-file" accept=".csv,.xlsx,.xls" tabindex="-1" aria-hidden="true" ${roAttr()} />
         </div>
         <p class="hint consent">Загружая номера, вы подтверждаете, что у вас есть законные основания звонить этим людям. CallMate согласия за вас не собирает. Храните согласия и документы у себя</p>
@@ -1202,28 +1246,33 @@ function sectionContacts(camp) {
       ${warnings.map((w) => `<p class="error">${escapeHtml(w)}</p>`).join("")}
       <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
       <div id="reload-precheck" class="panel nested" hidden></div>
-      <div id="new-col-alert" class="panel nested" hidden></div>
-      <div class="contacts-list-block">
+      <div id="new-col-alert" class="panel nested" hidden></div>`;
+
+  const listBlock = contacts.length
+    ? `<div class="contacts-list-block contacts-list-first">
         <h3 class="contacts-list-title">Список</h3>
         ${filters}
-        ${
-          contacts.length
-            ? `<div class="row-actions">
-            <button class="btn secondary" type="button" id="cancel-contacts" ${roAttr()}>Снять с обзвона</button>
-            <button class="btn secondary" type="button" id="restore-contacts" ${roAttr()}>Вернуть в обзвон</button>
-          </div>
-          <p class="hint" id="contacts-action-msg"></p>`
-            : ""
-        }
+        <div class="row-actions">
+          <button class="btn secondary" type="button" id="cancel-contacts" ${roAttr()}>Снять с обзвона</button>
+          <button class="btn secondary" type="button" id="restore-contacts" ${roAttr()}>Вернуть в обзвон</button>
+        </div>
+        <p class="hint" id="contacts-action-msg"></p>
         <table class="data data-contacts" id="contacts-table">
           <thead><tr><th class="col-check"></th><th>Телефон</th><th>Статус</th><th>Имя</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
-      </div>
+      </div>`
+    : "";
+
+  return `<section class="flow-section" id="sec-contacts">
+    <h2>Номера</h2>
+    <div class="panel wide contacts-panel">
+      ${reloadHint}
+      ${listBlock}
+      ${uploadZone}
       ${
-        started
-          ? `<button class="btn secondary" type="button" id="reload-entry" ${roAttr()}>Догрузить файл</button>
-        <p class="hint">Серого статуса нет: пока вы не подтвердите догрузку, новые номера в обзвон не попадут</p>`
+        started && contacts.length
+          ? `<p class="hint">Серого статуса нет: пока вы не подтвердите догрузку, новые номера в обзвон не попадут</p>`
           : ""
       }
     </div>
@@ -1655,6 +1704,14 @@ function bindJumpNav() {
         requestAnimationFrame(() => {
           document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
         });
+        return;
+      }
+      if (id === "integrations") {
+        navigate("/cabinet/integrations");
+        return;
+      }
+      if (id === "account") {
+        navigate("/cabinet/account");
         return;
       }
       if (id === "sec-schedule") {
