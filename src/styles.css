@@ -1,28 +1,28 @@
 :root,
 [data-theme="light"] {
-  --bg0: #e4ebf5;
-  --bg1: #f5f7fb;
-  --ink: #0b1220;
-  --muted: #5c677a;
-  --line: rgba(11, 18, 32, 0.1);
+  --bg0: #eef1f6;
+  --bg1: #f7f8fb;
+  --ink: #101828;
+  --muted: #667085;
+  --line: rgba(16, 24, 40, 0.08);
   --surface: #ffffff;
-  --surface-2: #f8fafc;
+  --surface-2: #f4f6f9;
   --accent: #2557ff;
   --accent-ink: #ffffff;
   --danger: #c62828;
   --ok: #0f7a4c;
-  --glow: rgba(37, 87, 255, 0.18);
-  --shadow: 0 10px 30px rgba(17, 35, 80, 0.07);
-  --radius: 14px;
-  --radius-sm: 10px;
-  --page: 1200px;
+  --glow: rgba(37, 87, 255, 0.08);
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 12px 32px rgba(16, 24, 40, 0.05);
+  --radius: 16px;
+  --radius-sm: 12px;
+  --page: 1120px;
   --s1: 0.35rem;
-  --s2: 0.6rem;
-  --s3: 1rem;
-  --s4: 1.35rem;
-  --s5: 1.85rem;
-  --s6: 2.5rem;
-  --control-h: 2.65rem;
+  --s2: 0.7rem;
+  --s3: 1.05rem;
+  --s4: 1.5rem;
+  --s5: 2.1rem;
+  --s6: 2.75rem;
+  --control-h: 2.75rem;
   --font: "Manrope", system-ui, sans-serif;
   --display: "Syne", "Manrope", sans-serif;
 }
@@ -81,13 +81,13 @@ html, body {
 body {
   font-family: var(--font);
   font-size: 15px;
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--ink);
   background:
-    radial-gradient(900px 520px at 12% -8%, var(--glow), transparent 60%),
-    linear-gradient(165deg, var(--bg0), var(--bg1) 55%, var(--bg0));
+    radial-gradient(800px 420px at 8% -12%, var(--glow), transparent 55%),
+    linear-gradient(180deg, var(--bg1), var(--bg0));
   background-attachment: fixed;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.011em;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -335,23 +335,22 @@ form.panel > .btn,
 .app-tabs a {
   display: inline-flex;
   align-items: center;
-  height: 2.15rem;
-  padding: 0 0.85rem;
+  height: 2.2rem;
+  padding: 0 0.9rem;
   border-radius: 999px;
   color: var(--muted);
   font-weight: 600;
-  font-size: 0.88rem;
-  border: 1px solid transparent;
+  font-size: 0.9rem;
 }
 
 .app-tabs a:hover {
   color: var(--ink);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 .app-tabs a.active {
   color: var(--ink);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 
 .page-topbar-actions {
@@ -400,7 +399,7 @@ form.panel > .btn,
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: var(--s4);
+  padding: var(--s5);
   max-width: none;
   width: 100%;
   box-shadow: var(--shadow);
@@ -560,13 +559,14 @@ form.panel > .btn,
 }
 
 .flow-section {
-  margin-bottom: var(--s5);
+  margin-bottom: var(--s6);
   scroll-margin-top: 5rem;
 }
 
 .flow-section > h2 {
-  font-size: 1.35rem;
+  font-size: 1.28rem;
   margin-bottom: var(--s3);
+  letter-spacing: -0.03em;
 }
 
 .section-head {
@@ -583,12 +583,14 @@ form.panel > .btn,
 .badge {
   display: inline-flex;
   align-items: center;
-  height: 1.6rem;
-  padding: 0 0.55rem;
+  height: 1.55rem;
+  padding: 0 0.65rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  font-size: 0.75rem;
-  font-weight: 700;
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .preview-grid {
@@ -690,32 +692,49 @@ form.panel > .btn,
 .ops-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--s2);
+  gap: var(--s3);
   margin: 0 0 var(--s5);
 }
 
 .status-chip {
   display: flex;
   flex-direction: column;
-  gap: var(--s1);
+  gap: var(--s2);
   min-width: 0;
-  padding: var(--s3);
+  padding: var(--s3) var(--s4);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  box-shadow: none;
 }
 
 .status-chip-ok {
-  border-color: color-mix(in srgb, var(--ok) 35%, var(--line));
+  border-color: color-mix(in srgb, var(--ok) 22%, var(--line));
+  background: color-mix(in srgb, var(--ok) 4%, var(--surface));
 }
 
 .status-chip-warn {
-  border-color: color-mix(in srgb, #d97706 45%, var(--line));
+  border-color: color-mix(in srgb, #d97706 28%, var(--line));
+  background: color-mix(in srgb, #d97706 5%, var(--surface));
 }
 
 .status-chip-muted {
   border-color: var(--line);
   background: var(--surface-2);
+}
+
+.status-chip-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.status-chip-state {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
 }
 
 .status-chip-top {
@@ -724,19 +743,6 @@ form.panel > .btn,
   align-items: baseline;
   justify-content: space-between;
   gap: 0.25rem 0.75rem;
-}
-
-.status-chip-label {
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: var(--muted);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.status-chip-state {
-  font-size: 0.86rem;
-  font-weight: 700;
 }
 
 .status-chip-preview {

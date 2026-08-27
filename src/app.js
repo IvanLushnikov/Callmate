@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout } from "./api.js?v=12";
+import { login as apiLogin, logout as apiLogout } from "./api.js?v=13";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -1386,6 +1386,163 @@ function maskPhone(phone) {
   return s.slice(0, 2) + "•••" + s.slice(-4);
 }
 
+function normalizeRuPhone(raw) {
+  let digits = String(raw ?? "").replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length === 11 && (digits[0] === "7" || digits[0] === "8")) {
+    digits = "7" + digits.slice(1);
+  } else if (digits.length === 10) {
+    digits = "7" + digits;
+  } else {
+    return null;
+  }
+  if (digits.length !== 11 || digits[0] !== "7") return null;
+  return `+${digits}`;
+}
+
+function isPhoneHeader(h) {
+  return /^(number|phone|tel|телефон|номер|мобильный|mobile|phonenumber)$/i.test(String(h || "").trim());
+}
+
+function isNameHeader(h) {
+  return /^(name|имя|fio|фио|client|клиент)$/i.test(String(h || "").trim());
+}
+
+function parseCsvText(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+  const src = String(text || "").replace(/^\uFEFF/, "");
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (inQuotes) {
+      if (ch === '"' && next === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        cell += ch;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === "," || ch === ";") {
+      row.push(cell.trim());
+      cell = "";
+    } else if (ch === "\n") {
+      row.push(cell.trim());
+      cell = "";
+      if (row.some((x) => x !== "")) rows.push(row);
+      row = [];
+    } else if (ch === "\r") {
+      /* skip */
+    } else {
+      cell += ch;
+    }
+  }
+  row.push(cell.trim());
+  if (row.some((x) => x !== "")) rows.push(row);
+  return rows;
+}
+
+async function loadXlsxLib() {
+  if (window.XLSX) return window.XLSX;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("xlsx_lib"));
+    document.head.appendChild(s);
+  });
+  if (!window.XLSX) throw new Error("xlsx_lib");
+  return window.XLSX;
+}
+
+async function rowsFromFile(file) {
+  const lower = String(file.name || "").toLowerCase();
+  if (lower.endsWith(".csv") || lower.endsWith(".txt")) {
+    return parseCsvText(await file.text());
+  }
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
+    const XLSX = await loadXlsxLib();
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const sheetName = wb.SheetNames[0];
+    if (!sheetName) return [];
+    const sheet = wb.Sheets[sheetName];
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+    return matrix.map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? "").trim()) : []));
+  }
+  throw new Error("format");
+}
+
+function contactsFromRows(matrix) {
+  if (!matrix?.length) {
+    return { good: [], bad: 0, columns: [], error: "empty" };
+  }
+  const header = matrix[0].map((h) => String(h || "").trim());
+  if (!header.some(Boolean)) {
+    return { good: [], bad: 0, columns: [], error: "empty" };
+  }
+  let phoneIdx = header.findIndex(isPhoneHeader);
+  let nameIdx = header.findIndex(isNameHeader);
+  if (phoneIdx < 0) {
+    // первая колонка с похожими на телефон значениями
+    for (let c = 0; c < header.length; c++) {
+      const sample = matrix.slice(1, 6).map((r) => r[c]).filter(Boolean);
+      if (sample.length && sample.every((v) => normalizeRuPhone(v))) {
+        phoneIdx = c;
+        break;
+      }
+    }
+  }
+  if (phoneIdx < 0) {
+    return { good: [], bad: 0, columns: [], error: "no_phone_col" };
+  }
+  const columns = header
+    .map((h, i) => ({ h, i }))
+    .filter(({ h, i }) => h && i !== phoneIdx && i !== nameIdx)
+    .map(({ h }) => h);
+
+  const good = [];
+  let bad = 0;
+  for (let r = 1; r < matrix.length; r++) {
+    const row = matrix[r] || [];
+    if (!row.some((x) => String(x || "").trim())) continue;
+    const phone = normalizeRuPhone(row[phoneIdx]);
+    if (!phone) {
+      bad++;
+      continue;
+    }
+    const name = nameIdx >= 0 ? String(row[nameIdx] || "").trim() : "";
+    const attrs = {};
+    header.forEach((h, i) => {
+      if (!h || i === phoneIdx || i === nameIdx) return;
+      const val = String(row[i] || "").trim();
+      if (val) attrs[h] = val;
+    });
+    good.push({
+      phone,
+      name,
+      status: STATUS.in_progress,
+      attempts: [],
+      verdict: null,
+      attrs,
+    });
+  }
+  return { good, bad, columns, error: null };
+}
+
+async function parseContactsFile(file) {
+  const matrix = await rowsFromFile(file);
+  return contactsFromRows(matrix);
+}
+
 /* ---------- auth views ---------- */
 
 function loginView() {
@@ -2127,47 +2284,78 @@ function simulateUpload(file) {
   ok.hidden = true;
   errors.innerHTML = "";
 
-  setTimeout(() => {
-    progress.hidden = true;
-    hint.hidden = true;
-    const demoContacts = [
-      { phone: "+79001112233", name: "Анна", status: STATUS.in_progress, attempts: [], verdict: null },
-      { phone: "bad", name: "", status: STATUS.in_progress, attempts: [], verdict: null, bad: true },
-      { phone: "+79005556677", name: "", status: STATUS.in_progress, attempts: [], verdict: null },
-    ];
-    const bad = demoContacts.filter((c) => c.bad);
-    const good = demoContacts.filter((c) => !c.bad);
-    if (bad.length) {
-      errors.innerHTML = `<p class="error">Непонятный телефон — строка не в обзвоне</p>
-        <p class="error">${bad.length} строк с ошибкой телефона не загрузили</p>
-        <p class="hint">Нужен российский номер: 8…, 7… или +7…</p>`;
-    }
+  parseContactsFile(file)
+    .then((parsed) => {
+      progress.hidden = true;
+      hint.hidden = true;
 
-    const newCols = ["имя", "город"];
-    const had = camp.columns || [];
-    const brandNew = newCols.filter((c) => !had.includes(c));
-    camp.columns = [...new Set([...had, ...newCols])];
+      if (parsed.error === "format") {
+        errors.innerHTML = `<p class="error">Нужен файл Excel или CSV</p>`;
+        return;
+      }
+      if (parsed.error === "empty") {
+        errors.innerHTML = `<p class="error">В файле нет строк</p>`;
+        return;
+      }
+      if (parsed.error === "no_phone_col") {
+        errors.innerHTML = `<p class="error">Не нашли столбец с телефоном</p>
+          <p class="hint">Назовите столбец Number, phone или Телефон</p>`;
+        return;
+      }
+      if (!parsed.good.length) {
+        errors.innerHTML = `<p class="error">Непонятный телефон — строка не в обзвоне</p>
+          <p class="hint">Нужен российский номер: 8…, 7… или +7…</p>`;
+        return;
+      }
 
-    if (camp.contacts?.length) {
-      showReloadPrecheck(camp, good, brandNew);
-      return;
-    }
+      if (parsed.bad) {
+        errors.innerHTML = `<p class="error">Непонятный телефон — строка не в обзвоне</p>
+          <p class="error">${parsed.bad} строк с ошибкой телефона не загрузили</p>
+          <p class="hint">Нужен российский номер: 8…, 7… или +7…</p>`;
+      }
 
-    if (brandNew.length && had.length) {
-      showNewColumnAlert(camp, good, brandNew);
-      return;
-    }
+      const newCols = parsed.columns || [];
+      const had = camp.columns || [];
+      const brandNew = newCols.filter((c) => !had.includes(c));
+      camp.columns = [...new Set([...had, ...newCols])];
+      const good = parsed.good;
 
-    camp.uploadWarnings = [];
-    if (!camp.scenarioText?.includes("{город}") && camp.scenarioText?.includes("{компания}")) {
-      camp.uploadWarnings.push('Нет столбца «компания» в файле');
-    }
-    camp.contacts = good;
-    persistCampaigns();
-    ok.hidden = false;
-    ok.textContent = "Контакты загружены";
-    render();
-  }, 500);
+      if (camp.contacts?.length) {
+        showReloadPrecheck(camp, good, brandNew);
+        return;
+      }
+
+      if (brandNew.length && had.length) {
+        showNewColumnAlert(camp, good, brandNew);
+        return;
+      }
+
+      camp.uploadWarnings = [];
+      const needed = [...(camp.scenarioText || "").matchAll(/\{([^}]+)\}/g)].map((m) => m[1]);
+      for (const key of needed) {
+        if (/^(имя|name)$/i.test(key)) continue;
+        if (!camp.columns.includes(key) && !newCols.includes(key)) {
+          camp.uploadWarnings.push(`Нет столбца «${key}» в файле`);
+        }
+      }
+      camp.contacts = good;
+      persistCampaigns();
+      ok.hidden = false;
+      ok.textContent = "Контакты загружены";
+      render();
+    })
+    .catch((err) => {
+      progress.hidden = true;
+      hint.hidden = true;
+      const code = err?.message;
+      if (code === "xlsx_lib") {
+        errors.innerHTML = `<p class="error">Не удалось прочитать Excel. Проверьте сеть или сохраните файл как CSV</p>`;
+      } else if (code === "format") {
+        errors.innerHTML = `<p class="error">Нужен файл Excel или CSV</p>`;
+      } else {
+        errors.innerHTML = `<p class="error">Не удалось прочитать файл</p>`;
+      }
+    });
 }
 
 function showNewColumnAlert(camp, good, brandNew) {
@@ -2202,10 +2390,17 @@ function showNewColumnAlert(camp, good, brandNew) {
 function showReloadPrecheck(camp, incoming, brandNew) {
   const box = document.getElementById("reload-precheck");
   if (!box) return;
-  const neu = incoming || [
-    { phone: "+79009998877", name: "Игорь", status: STATUS.in_progress, attempts: [], verdict: null },
-  ];
-  const dupCount = (camp.contacts || []).filter((c) => neu.some((n) => n.phone === c.phone)).length || 1;
+  const neu = incoming || [];
+  if (!neu.length) {
+    box.hidden = false;
+    box.innerHTML = `<h4>Предпроверка</h4><p class="hint">В файле нет номеров для догрузки</p>
+      <button class="btn secondary" type="button" id="reload-cancel">Отменить</button>`;
+    document.getElementById("reload-cancel").onclick = () => {
+      box.hidden = true;
+    };
+    return;
+  }
+  const dupCount = (camp.contacts || []).filter((c) => neu.some((n) => n.phone === c.phone)).length;
   box.hidden = false;
   box.innerHTML = `<h4>Предпроверка</h4>
     <p class="hint">Покажите расхождения до подтверждения</p>
@@ -2233,11 +2428,15 @@ function showReloadPrecheck(camp, incoming, brandNew) {
       const existing = camp.contacts.find((c) => c.phone === n.phone);
       if (existing) {
         existing.name = n.name || existing.name;
+        existing.attrs = { ...(existing.attrs || {}), ...(n.attrs || {}) };
         updated++;
       } else {
         camp.contacts.push(n);
         added++;
       }
+    }
+    if (brandNew?.length) {
+      camp.columns = [...new Set([...(camp.columns || []), ...brandNew])];
     }
     persistCampaigns();
     box.hidden = true;
