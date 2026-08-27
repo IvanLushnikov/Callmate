@@ -783,7 +783,7 @@ function pageCampaignList() {
   if (!state.campaigns.length) {
     return `<section class="campaigns-empty" id="sec-campaign">
       <div class="empty-state">
-        <p>Создайте первую кампанию</p>
+        <p>Нет кампаний. Создайте первую</p>
         ${createBtn}
       </div>
     </section>`;

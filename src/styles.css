@@ -568,8 +568,8 @@ form.panel > .btn,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--s3);
-  margin-bottom: var(--s3);
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .campaigns-head h2 {
@@ -581,8 +581,13 @@ form.panel > .btn,
   margin-left: 0;
 }
 
+.campaigns-list .panel-fit {
+  width: fit-content;
+  max-width: 100%;
+}
+
 .camp-row:hover td {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  background: var(--surface-2);
 }
 
 .camp-name {
