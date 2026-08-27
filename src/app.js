@@ -115,6 +115,7 @@ const state = {
     adminExpandedId: null,
     statusExpandKey: null,
     scheduleDrawerOpen: false,
+    contactStatusFilter: "all",
   },
 };
 
@@ -558,7 +559,7 @@ function cabinetBody(parsed) {
     const camp = campaignById(parsed.id);
     if (!camp) {
       return `<div class="panel wide"><p>Кампания не найдена</p>
-        <a class="back-link" href="#/cabinet/campaigns">← К кампаниям</a></div>`;
+        <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a></div>`;
     }
     return campaignWorkspace(camp);
   }
@@ -608,13 +609,13 @@ function pageCampaignList() {
 function pageCampaignNew() {
   if (locked()) {
     return `<section class="flow-section">
-      <a class="back-link" href="#/cabinet/campaigns">← К кампаниям</a>
+      <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
       <h2>Новая кампания</h2>
       <div class="panel wide"><p class="hint">Аккаунт заблокирован</p></div>
     </section>`;
   }
   return `<section class="flow-section" id="sec-campaign">
-    <a class="back-link" href="#/cabinet/campaigns">← К кампаниям</a>
+    <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
     <h2>Новая кампания</h2>
     ${newCampaignFormInline()}
   </section>`;
@@ -710,13 +711,102 @@ function telephonyStatusLine() {
   return "Телефония не подключена";
 }
 
-function telephonyStatusCompact() {
-  return `<div class="summary-row" id="sec-telephony-summary">
-    <div class="summary-row-body">
-      <h2>Телефония для обзвона</h2>
-      <p class="summary-line">${escapeHtml(telephonyStatusLine())}</p>
+function scheduleIsSet(camp) {
+  return !!(camp.schedule?.days?.length && camp.schedule?.tz);
+}
+
+function contactCountsByStatus(contacts) {
+  const counts = { in_progress: 0, done: 0, no_answer: 0, cancel: 0 };
+  for (const c of contacts || []) {
+    for (const [key, val] of Object.entries(STATUS)) {
+      if (c.status === val) counts[key] += 1;
+    }
+  }
+  return counts;
+}
+
+function opsStripHtml(camp) {
+  const t = state.telephony;
+  const telOk = t.status === "ok" && !t.checking;
+  const telWarn = t.status === "error" || t.checking;
+  const telLabel = t.checking
+    ? "Проверяем…"
+    : telOk
+      ? "Подключена"
+      : "Не подключена";
+  const telChipClass = telOk ? "status-chip-ok" : telWarn ? "status-chip-warn" : "status-chip-muted";
+
+  const schOk = scheduleIsSet(camp);
+  const schChipClass = schOk ? "status-chip-ok" : "status-chip-muted";
+  const schStatus = schOk ? "Настроено" : "Не задано";
+  const schPreview = schOk ? scheduleSummaryLine(camp) : "Дни не заданы";
+
+  const contacts = camp.contacts || [];
+  const n = contacts.length;
+  const counts = contactCountsByStatus(contacts);
+  const countBits = n
+    ? Object.entries(counts)
+        .filter(([, v]) => v > 0)
+        .map(([k, v]) => `${STATUS_LABEL[STATUS[k]]} ${v}`)
+        .join(" · ")
+    : "";
+  const numbersChipClass = n ? "status-chip-ok" : "status-chip-muted";
+
+  const reasons = launchBlockReasons(camp);
+  const canLaunch =
+    (camp.dial_state === "draft" || camp.dial_state === "stopped") &&
+    reasons.length === 0 &&
+    !locked();
+  let launchTitle = "Готово к запуску";
+  let launchBody = "Можно начинать";
+  let launchChipClass = "status-chip-ok";
+  if (camp.dial_state === "running") {
+    launchTitle = "Идёт обзвон";
+    launchBody = "Текущий разговор закончим. Новые звонки не начнём";
+    launchChipClass = "status-chip-ok";
+  } else if (camp.dial_state === "paused") {
+    launchTitle = "На паузе";
+    launchBody = "Текущий разговор закончим. Новые звонки не начнём";
+    launchChipClass = "status-chip-warn";
+  } else if (!canLaunch) {
+    launchTitle = "Нельзя запустить";
+    launchBody = reasons.length
+      ? `<ul class="chip-reasons">${reasons.map((r) => `<li>${escapeHtml(r.text)}</li>`).join("")}</ul>`
+      : "Нельзя запустить";
+    launchChipClass = "status-chip-warn";
+  }
+
+  return `<div class="ops-strip" id="sec-ops">
+    <div class="status-chip ${telChipClass}" id="sec-telephony-summary">
+      <div class="status-chip-top">
+        <span class="status-chip-label">Телефония</span>
+        <span class="status-chip-state">${escapeHtml(telLabel)}</span>
+      </div>
+      <p class="status-chip-preview">${escapeHtml(telephonyStatusLine())}</p>
+      <a class="btn secondary status-chip-action" href="#/cabinet/integrations">Настроить</a>
     </div>
-    <a class="btn secondary" href="#/cabinet/integrations">Настроить в Интеграциях</a>
+    <div class="status-chip ${schChipClass}" id="sec-schedule">
+      <div class="status-chip-top">
+        <span class="status-chip-label">Когда звоним</span>
+        <span class="status-chip-state">${escapeHtml(schStatus)}</span>
+      </div>
+      <p class="status-chip-preview">${escapeHtml(schPreview)}</p>
+      <button class="btn secondary status-chip-action" type="button" id="schedule-open">Настроить</button>
+    </div>
+    <div class="status-chip ${numbersChipClass}" id="sec-ops-numbers">
+      <div class="status-chip-top">
+        <span class="status-chip-label">Номера</span>
+        <span class="status-chip-state">${escapeHtml(String(n))} ${n === 1 ? "номер" : "номеров"}</span>
+      </div>
+      <p class="status-chip-preview">${countBits ? escapeHtml(countBits) : "Загрузите контакты"}</p>
+    </div>
+    <div class="status-chip ${launchChipClass}" id="sec-launch">
+      <div class="status-chip-top">
+        <span class="status-chip-label">Запуск</span>
+        <span class="status-chip-state">${escapeHtml(launchTitle)}</span>
+      </div>
+      <div class="status-chip-preview">${launchBody}</div>
+    </div>
   </div>`;
 }
 
@@ -743,35 +833,12 @@ function dialActionsHtml(camp) {
     <p class="hint" id="dial-progress" hidden>Запускаем…</p>`;
 }
 
-function launchGatesHtml(camp) {
-  const reasons = launchBlockReasons(camp);
-  if (!reasons.length || !(camp.dial_state === "draft" || camp.dial_state === "stopped")) return "";
-  return `<div class="banner banner-warn" id="sec-launch-gates">
-    <strong>Нельзя начать обзвон</strong>
-    <ul>${reasons
-      .map((r) => {
-        let extra = "";
-        if (r.money) extra = ` <span class="hint">Пополнение делает поддержка CallMate</span>`;
-        if (r.action === "contacts")
-          extra += ` <a href="#sec-contacts" data-jump="sec-contacts">Загрузить файл</a>`;
-        if (r.action === "tel")
-          extra += ` <a href="#/cabinet/integrations">Телефония</a>`;
-        if (r.action === "schedule")
-          extra += ` <a href="#sec-schedule" data-jump="sec-schedule">Расписание</a>`;
-        if (r.weak) extra = ` <span class="hint">Допишите цель и сведения или поправьте текст</span>`;
-        return `<li>${escapeHtml(r.text)}${extra}</li>`;
-      })
-      .join("")}</ul>
-    <p class="hint">Пустое имя — не мешает запуску</p>
-  </div>`;
-}
-
 function campaignWorkspace(camp) {
   const started = isStarted(camp);
   const weak = isWeakScenario(camp);
   return `<div class="workspace" data-camp="${escapeHtml(camp.id)}">
     <header class="workspace-bar">
-      <a class="back-link" href="#/cabinet/campaigns">← К кампаниям</a>
+      <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
       <div class="workspace-heading">
         <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
         <span class="badge">${escapeHtml(dialLabel(camp.dial_state))}</span>
@@ -788,68 +855,45 @@ function campaignWorkspace(camp) {
     ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
     <p class="hint meta-line">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
 
-    <div class="workspace-primary">
-      ${blockGoalContext(camp)}
-      ${blockBotPreview(camp, weak, started)}
-    </div>
+    ${opsStripHtml(camp)}
+    ${scheduleDrawerHtml(camp)}
 
-    <div class="workspace-block">
-      ${blockScenario(camp)}
-    </div>
+    ${blockGoalContext(camp)}
+    ${blockBotPreview(camp, weak, started)}
+    ${blockScenario(camp)}
+    ${blockNumbers(camp)}
 
-    <div class="workspace-summaries">
-      ${blockSchedule(camp)}
-      <section class="flow-section summary-section">${telephonyStatusCompact()}</section>
-    </div>
-
-    <div class="workspace-block">
-      ${blockNumbers(camp)}
-    </div>
-
-    <div class="workspace-grid">
-      <section class="flow-section" id="sec-analytics">
-        <h2>Итоги кампании</h2>
-        <div class="panel wide">${blockCampaignAnalytics(camp)}</div>
-      </section>
-      <section class="flow-section" id="sec-launch">
-        <h2>Готовность к запуску</h2>
-        <div class="panel wide">
-          ${launchGatesHtml(camp) || `<p class="hint">Ограничений нет — можно запускать из шапки</p>`}
-          ${
-            camp.dial_state === "running"
-              ? `<p class="hint">Текущий разговор закончим. Новые звонки не начнём</p><p class="hint">Обзвон уже идёт</p>`
-              : camp.dial_state === "paused"
-                ? `<p class="hint">Текущий разговор закончим. Новые звонки не начнём</p>`
-                : ""
-          }
-        </div>
-      </section>
-    </div>
+    <section class="flow-section outcomes-section" id="sec-analytics">
+      <h2>Итоги кампании</h2>
+      <div class="panel wide compact-outcomes">${blockCampaignAnalytics(camp)}</div>
+    </section>
   </div>`;
 }
 
 function blockGoalContext(camp) {
   const started = isStarted(camp);
   const dis = started || locked() ? "disabled" : "";
+  const verdicts = ensureVerdicts(camp);
   return `<section class="flow-section" id="sec-goal">
     <h2>Цель и контекст</h2>
     <form class="panel wide" id="goal-form">
       ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
-      <label>Название</label>
-      <input id="camp-name-edit" value="${escapeHtml(camp.name || "")}" ${dis} />
-      <p class="hint">Пустое имя — не мешает запуску</p>
-      <label>Цель звонка</label>
-      <input id="camp-goal-edit" value="${escapeHtml(camp.goal || "")}" placeholder="Например: напомнить о записи" ${dis} />
-      <p class="hint">К чему должен привести разговор</p>
-      <label>Сведения</label>
-      <textarea id="camp-details-edit" rows="4" placeholder="Что важно сказать абоненту" ${dis}>${escapeHtml(camp.details || "")}</textarea>
-      <p class="hint">Что роботу знать о продукте и ситуации</p>
-      <div class="error" id="goal-error" hidden></div>
-      <p class="hint ok-line" id="goal-ok" hidden>Сохранено</p>
-      ${started ? "" : `<button class="btn" type="submit" ${dis}>Сохранить</button>`}
-      ${(() => {
-        const verdicts = ensureVerdicts(camp);
-        return `<section style="margin-top:1.25rem">
+      <div class="goal-layout">
+        <div class="goal-fields">
+          <label>Название</label>
+          <input id="camp-name-edit" value="${escapeHtml(camp.name || "")}" ${dis} />
+          <p class="hint">Пустое имя — не мешает запуску</p>
+          <label>Цель звонка</label>
+          <input id="camp-goal-edit" value="${escapeHtml(camp.goal || "")}" placeholder="Например: напомнить о записи" ${dis} />
+          <p class="hint">К чему должен привести разговор</p>
+          <label>Сведения</label>
+          <textarea id="camp-details-edit" rows="4" placeholder="Что важно сказать абоненту" ${dis}>${escapeHtml(camp.details || "")}</textarea>
+          <p class="hint">Что роботу знать о продукте и ситуации</p>
+          <div class="error" id="goal-error" hidden></div>
+          <p class="hint ok-line" id="goal-ok" hidden>Сохранено</p>
+          ${started ? "" : `<button class="btn" type="submit" ${dis}>Сохранить</button>`}
+        </div>
+        <aside class="goal-verdicts">
           <h3>Возможные итоги разговора</h3>
           <p class="hint">Система собрала список по цели. Менять его нельзя</p>
           ${
@@ -857,8 +901,8 @@ function blockGoalContext(camp) {
               ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(v)}</li>`).join("")}</ul>`
               : `<p class="hint">Пока нет итогов — уточните цель и соберите сценарий снова</p>`
           }
-        </section>`;
-      })()}
+        </aside>
+      </div>
     </form>
   </section>`;
 }
@@ -867,10 +911,7 @@ function blockBotPreview(camp, weak, started) {
   const preview = buildPreview(camp);
   const dis = started || locked() ? "disabled" : "";
   return `<section class="flow-section" id="sec-preview">
-    <div class="section-head">
-      <h2>Робот так понял сценарий</h2>
-      ${!started && !locked() ? `<p class="hint">Можно править каждый блок</p>` : ""}
-    </div>
+    <h2>Робот так понял сценарий</h2>
     <form class="panel wide preview-panel" id="preview-form">
       ${
         weak && !started
@@ -883,20 +924,20 @@ function blockBotPreview(camp, weak, started) {
       <div class="preview-edit-grid">
         <div class="preview-field">
           <label for="preview-greeting">Приветствие</label>
-          <textarea id="preview-greeting" rows="7" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
+          <textarea id="preview-greeting" rows="4" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
           <p class="hint">Если имени нет — робот его не говорит</p>
         </div>
         <div class="preview-field">
           <label for="preview-says">Что говорит</label>
-          <textarea id="preview-says" rows="7" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
+          <textarea id="preview-says" rows="4" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
         </div>
         <div class="preview-field">
           <label for="preview-replies">Как отвечает</label>
-          <textarea id="preview-replies" rows="7" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
+          <textarea id="preview-replies" rows="4" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
         </div>
         <div class="preview-field">
           <label for="preview-tone">Тон</label>
-          <textarea id="preview-tone" rows="7" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
+          <textarea id="preview-tone" rows="4" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
           <p class="hint">Без давления оформить любой ценой</p>
         </div>
       </div>
@@ -905,8 +946,8 @@ function blockBotPreview(camp, weak, started) {
           ? `<p class="hint">${started ? "После старта превью только смотрим" : "Аккаунт заблокирован — правки недоступны"}</p>`
           : `<div class="row-actions">
               <button class="btn" type="submit">Сохранить превью</button>
-            </div>
-            <p class="hint ok-line" id="preview-ok" hidden>Превью сохранено</p>`
+              <p class="hint ok-line" id="preview-ok" hidden>Превью сохранено</p>
+            </div>`
       }
     </form>
   </section>`;
@@ -914,10 +955,6 @@ function blockBotPreview(camp, weak, started) {
 
 function blockScenario(camp) {
   return sectionScenario(camp);
-}
-
-function blockSchedule(camp) {
-  return sectionSchedule(camp);
 }
 
 function blockNumbers(camp) {
@@ -1040,17 +1077,35 @@ function sectionScenario(camp) {
   const attrs = camp.columns || [];
   return `<section class="flow-section" id="sec-scenario">
     <h2>Сценарий и этапы</h2>
-    <div class="panel wide">
+    <div class="panel wide scenario-panel">
       ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
       <p class="hint">Можно править текст; ветки диалога рисовать не нужно</p>
       <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
-      <label>Текст сценария</label>
-      <textarea id="scenario-text" rows="6" ${dis}>${escapeHtml(camp.scenarioText || camp.details || "")}</textarea>
-      <div class="row-actions">
-        <button class="btn secondary" type="button" id="insert-attr" ${dis}>Вставить поле</button>
-        <button class="btn" type="button" id="save-scenario" ${dis}>Сохранить черновик</button>
+      ${
+        stages.length
+          ? `<div class="stages-compact">${stages
+              .map(
+                (s, i) => `<form class="stage-form-compact" data-idx="${i}">
+            <label>Цель этапа</label><input name="goal" value="${escapeHtml(s.goal || "")}" ${dis} />
+            <label>Что на входе</label><input name="input" value="${escapeHtml(s.input || "")}" ${dis} />
+            <label>Что на выходе</label><input name="output" value="${escapeHtml(s.output || "")}" ${dis} />
+            <button class="btn secondary" type="submit" ${dis}>Сохранить этап</button>
+          </form>`
+              )
+              .join("")}</div>`
+          : `<p class="hint">Этапы появятся после сборки сценария</p>`
+      }
+      <div class="scenario-compose">
+        <label for="scenario-text">Текст сценария</label>
+        <div class="scenario-compose-row">
+          <textarea id="scenario-text" rows="4" ${dis}>${escapeHtml(camp.scenarioText || camp.details || "")}</textarea>
+          <div class="scenario-compose-actions">
+            <button class="btn secondary" type="button" id="insert-attr" ${dis}>Вставить поле</button>
+            <button class="btn" type="button" id="save-scenario" ${dis}>Сохранить черновик</button>
+            <p class="hint ok-line" id="scenario-ok" hidden>Черновик сохранён</p>
+          </div>
+        </div>
       </div>
-      <p class="hint ok-line" id="scenario-ok" hidden>Черновик сохранён</p>
       <div id="attr-picker" class="panel nested" hidden>
         <h4>Поля из файла</h4>
         <p class="hint">Имя поля = название столбца в файле</p>
@@ -1065,21 +1120,6 @@ function sectionScenario(camp) {
             : `<p class="hint">Сначала загрузите контакты или добавьте поле</p>`
         }
       </div>
-      <h3>Этапы разговора</h3>
-      ${
-        stages.length
-          ? stages
-              .map(
-                (s, i) => `<form class="panel nested stage-form" data-idx="${i}">
-            <label>Цель этапа</label><input name="goal" value="${escapeHtml(s.goal || "")}" ${dis} />
-            <label>Что на входе</label><input name="input" value="${escapeHtml(s.input || "")}" ${dis} />
-            <label>Что на выходе</label><input name="output" value="${escapeHtml(s.output || "")}" ${dis} />
-            <button class="btn secondary" type="submit" ${dis}>Сохранить этап</button>
-          </form>`
-              )
-              .join("")
-          : `<p class="hint">Этапы появятся после сборки сценария</p>`
-      }
       ${
         started
           ? `<p class="hint">После старта менять нельзя</p>
@@ -1095,33 +1135,46 @@ function sectionContacts(camp) {
   const started = isStarted(camp);
   const contacts = camp.contacts || [];
   const warnings = camp.uploadWarnings || [];
+  const filter = state.ui.contactStatusFilter || "all";
+  const filtered =
+    filter === "all"
+      ? contacts
+      : contacts.filter((r) => r.status === STATUS[filter]);
   const reloadHint = started
     ? `<p class="hint">Номера догрузить можно. Новое поле в сценарий — уже нет</p>`
     : "";
-  const table =
-    contacts.length === 0
-      ? `<p>Загрузите контакты</p>`
-      : `<div class="row-actions">
-          <button class="btn secondary" type="button" id="cancel-contacts" ${roAttr()}>Снять с обзвона</button>
-          <button class="btn secondary" type="button" id="restore-contacts" ${roAttr()}>Вернуть в обзвон</button>
-        </div>
-        <p class="hint" id="contacts-action-msg"></p>
-        <table class="data" id="contacts-table">
-          <thead><tr><th></th><th>Телефон</th><th>Статус</th><th>Имя</th></tr></thead>
-          <tbody>${contacts
-            .map((r) => {
-              const key = `${camp.id}|${r.phone}`;
-              const open = state.ui.statusExpandKey === key;
-              return `<tr>
+  const filterKeys = [
+    { id: "all", label: "Все" },
+    { id: "in_progress", label: STATUS_LABEL[STATUS.in_progress] },
+    { id: "done", label: STATUS_LABEL[STATUS.done] },
+    { id: "no_answer", label: STATUS_LABEL[STATUS.no_answer] },
+    { id: "cancel", label: STATUS_LABEL[STATUS.cancel] },
+  ];
+  const filters = `<div class="status-filters" role="tablist" aria-label="Статус">
+      ${filterKeys
+        .map(
+          (f) =>
+            `<button type="button" class="status-filter${filter === f.id ? " active" : ""}" data-contact-filter="${f.id}">${escapeHtml(f.label)}</button>`
+        )
+        .join("")}
+    </div>`;
+  const rows = filtered.length
+    ? filtered
+        .map((r) => {
+          const key = `${camp.id}|${r.phone}`;
+          const open = state.ui.statusExpandKey === key;
+          return `<tr>
               <td><input type="checkbox" class="contact-check" data-phone="${escapeHtml(r.phone)}" ${roAttr()} /></td>
               <td><button type="button" class="linkish" data-expand-status="${escapeHtml(key)}">${escapeHtml(maskPhone(r.phone))}</button></td>
               <td>${escapeHtml(statusLabel(r.status))}</td>
               <td>${escapeHtml(r.name || "")}</td>
             </tr>
             ${open ? `<tr class="expand-row"><td colspan="4">${contactDrawerHtml(camp, r)}</td></tr>` : ""}`;
-            })
-            .join("")}</tbody>
-        </table>`;
+        })
+        .join("")
+    : contacts.length === 0
+      ? `<tr><td colspan="4"><p class="hint">Загрузите контакты</p></td></tr>`
+      : `<tr><td colspan="4"></td></tr>`;
 
   return `<section class="flow-section" id="sec-contacts">
     <h2>Номера</h2>
@@ -1143,8 +1196,20 @@ function sectionContacts(camp) {
       <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
       <div id="reload-precheck" class="panel nested" hidden></div>
       <div id="new-col-alert" class="panel nested" hidden></div>
-      <h3 style="margin-top:1rem">Список</h3>
-      ${table}
+      ${filters}
+      ${
+        contacts.length
+          ? `<div class="row-actions">
+          <button class="btn secondary" type="button" id="cancel-contacts" ${roAttr()}>Снять с обзвона</button>
+          <button class="btn secondary" type="button" id="restore-contacts" ${roAttr()}>Вернуть в обзвон</button>
+        </div>
+        <p class="hint" id="contacts-action-msg"></p>`
+          : ""
+      }
+      <table class="data" id="contacts-table">
+        <thead><tr><th></th><th>Телефон</th><th>Статус</th><th>Имя</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
       ${
         started
           ? `<button class="btn secondary" type="button" id="reload-entry" ${roAttr()}>Догрузить файл</button>
@@ -1231,21 +1296,9 @@ function scheduleFormFields(camp) {
     </div>`;
 }
 
-function sectionSchedule(camp) {
-  if (!camp) return "";
-  const open = !!state.ui.scheduleDrawerOpen;
-  return `<section class="flow-section summary-section" id="sec-schedule">
-    <div class="summary-row">
-      <div class="summary-row-body">
-        <h2>Когда звоним</h2>
-        <p class="summary-line">${escapeHtml(scheduleSummaryLine(camp))}</p>
-      </div>
-      <button class="btn secondary" type="button" id="schedule-open">Настроить</button>
-    </div>
-  </section>
-  ${
-    open
-      ? `<div class="drawer-backdrop" id="schedule-drawer-backdrop"></div>
+function scheduleDrawerHtml(camp) {
+  if (!camp || !state.ui.scheduleDrawerOpen) return "";
+  return `<div class="drawer-backdrop" id="schedule-drawer-backdrop"></div>
     <aside class="drawer" id="schedule-drawer" role="dialog" aria-labelledby="schedule-drawer-title">
       <header class="drawer-head">
         <h2 id="schedule-drawer-title">Когда звоним</h2>
@@ -1254,9 +1307,7 @@ function sectionSchedule(camp) {
       <form class="drawer-body" id="schedule-form">
         ${scheduleFormFields(camp)}
       </form>
-    </aside>`
-      : ""
-  }`;
+    </aside>`;
 }
 
 function launchBlockReasons(camp) {
@@ -1787,7 +1838,7 @@ function bindCampaignForms() {
         ta.focus();
       };
     });
-    document.querySelectorAll(".stage-form").forEach((form) => {
+    document.querySelectorAll(".stage-form, .stage-form-compact").forEach((form) => {
       form.onsubmit = (e) => {
         e.preventDefault();
         if (!camp || isStarted(camp) || locked()) return;
@@ -2275,6 +2326,13 @@ function bindStatuses() {
       render();
     };
   }
+  document.querySelectorAll("[data-contact-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      const next = btn.getAttribute("data-contact-filter") || "all";
+      state.ui.contactStatusFilter = next;
+      render();
+    };
+  });
 }
 
 function bindAnalytics() {
