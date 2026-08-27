@@ -70,17 +70,25 @@ export async function login(loginName, password) {
   if (!API_BASE) {
     throw apiError("api_not_configured");
   }
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ login: loginName, password }),
-  });
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ login: loginName, password }),
+    });
+  } catch {
+    throw apiError("request_failed");
+  }
   if (!res.ok) {
     const { code, details } = await readErrorBody(res);
-    throw apiError(code === "request_failed" ? "invalid_credentials" : code, {
-      details,
-      status: res.status,
-    });
+    const mapped =
+      res.status === 401 || code === "invalid_credentials" || code === "auth_failed"
+        ? "invalid_credentials"
+        : code === "request_failed"
+          ? "server"
+          : code;
+    throw apiError(mapped, { details, status: res.status });
   }
   return res.json();
 }
