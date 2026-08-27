@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout } from "./api.js?v=10";
+import { login as apiLogin, logout as apiLogout } from "./api.js?v=11";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -583,22 +583,22 @@ function pageCampaignList() {
 
   const rows = state.campaigns
     .map(
-      (c) => `<tr>
-        <td><a href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">${escapeHtml(c.name || "Без названия")}</a></td>
-        <td><span class="badge">${escapeHtml(dialLabel(c.dial_state))}</span></td>
-        <td>${escapeHtml(c.goal || "—")}</td>
-        <td>${(c.contacts || []).length}</td>
+      (c) => `<tr class="camp-row" data-href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">
+        <td><a class="camp-name" href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">${escapeHtml(c.name || "Без названия")}</a></td>
+        <td><span class="badge badge-quiet">${escapeHtml(dialLabel(c.dial_state))}</span></td>
+        <td class="camp-goal">${escapeHtml(c.goal || "—")}</td>
+        <td class="camp-count">${(c.contacts || []).length}</td>
       </tr>`
     )
     .join("");
 
-  return `<section class="flow-section" id="sec-campaign">
-    <div class="section-head">
+  return `<section class="flow-section campaigns-list" id="sec-campaign">
+    <div class="campaigns-head">
       <h2>Кампании</h2>
       ${createBtn}
     </div>
-    <div class="panel wide">
-      <table class="data">
+    <div class="panel wide panel-fit">
+      <table class="data data-camps">
         <thead><tr><th>Название</th><th>Состояние</th><th>Цель</th><th>Номеров</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -770,8 +770,9 @@ function opsStripHtml(camp) {
     launchChipClass = "status-chip-warn";
   } else if (!canLaunch) {
     launchTitle = "Нельзя запустить";
-    launchBody = reasons.length
-      ? `<ul class="chip-reasons">${reasons.map((r) => `<li>${escapeHtml(r.text)}</li>`).join("")}</ul>`
+    const top = reasons.slice(0, 3);
+    launchBody = top.length
+      ? `<p class="chip-reasons-inline">${top.map((r) => escapeHtml(r.text)).join(" · ")}</p>`
       : "Нельзя запустить";
     launchChipClass = "status-chip-warn";
   }
@@ -887,7 +888,6 @@ function blockGoalContext(camp) {
           <p class="hint">Что роботу знать о продукте и ситуации</p>
           <div class="error" id="goal-error" hidden></div>
           <p class="hint ok-line" id="goal-ok" hidden>Сохранено</p>
-          ${started ? "" : `<button class="btn" type="submit" ${dis}>Сохранить</button>`}
         </div>
         <aside class="goal-verdicts">
           <h3>Возможные итоги разговора</h3>
@@ -899,6 +899,7 @@ function blockGoalContext(camp) {
           }
         </aside>
       </div>
+      ${started ? "" : `<div class="goal-actions"><button class="btn" type="submit" ${dis}>Сохранить</button></div>`}
     </form>
   </section>`;
 }
@@ -1082,10 +1083,21 @@ function sectionScenario(camp) {
           ? `<div class="stages-compact">${stages
               .map(
                 (s, i) => `<form class="stage-form-compact" data-idx="${i}">
-            <label>Цель этапа</label><input name="goal" value="${escapeHtml(s.goal || "")}" ${dis} />
-            <label>Что на входе</label><input name="input" value="${escapeHtml(s.input || "")}" ${dis} />
-            <label>Что на выходе</label><input name="output" value="${escapeHtml(s.output || "")}" ${dis} />
-            <button class="btn secondary" type="submit" ${dis}>Сохранить этап</button>
+            <div class="stage-field">
+              <label>Цель этапа</label>
+              <input name="goal" value="${escapeHtml(s.goal || "")}" ${dis} />
+            </div>
+            <div class="stage-field">
+              <label>Что на входе</label>
+              <input name="input" value="${escapeHtml(s.input || "")}" ${dis} />
+            </div>
+            <div class="stage-field">
+              <label>Что на выходе</label>
+              <input name="output" value="${escapeHtml(s.output || "")}" ${dis} />
+            </div>
+            <div class="stage-field stage-field-action">
+              <button class="btn secondary" type="submit" ${dis}>Сохранить этап</button>
+            </div>
           </form>`
               )
               .join("")}</div>`
@@ -1093,13 +1105,11 @@ function sectionScenario(camp) {
       }
       <div class="scenario-compose">
         <label for="scenario-text">Текст сценария</label>
-        <div class="scenario-compose-row">
-          <textarea id="scenario-text" rows="4" ${dis}>${escapeHtml(camp.scenarioText || camp.details || "")}</textarea>
-          <div class="scenario-compose-actions">
-            <button class="btn secondary" type="button" id="insert-attr" ${dis}>Вставить поле</button>
-            <button class="btn" type="button" id="save-scenario" ${dis}>Сохранить черновик</button>
-            <p class="hint ok-line" id="scenario-ok" hidden>Черновик сохранён</p>
-          </div>
+        <textarea id="scenario-text" rows="4" ${dis}>${escapeHtml(camp.scenarioText || camp.details || "")}</textarea>
+        <div class="scenario-compose-actions">
+          <button class="btn secondary" type="button" id="insert-attr" ${dis}>Вставить поле</button>
+          <button class="btn" type="button" id="save-scenario" ${dis}>Сохранить черновик</button>
+          <p class="hint ok-line" id="scenario-ok" hidden>Черновик сохранён</p>
         </div>
       </div>
       <div id="attr-picker" class="panel nested" hidden>
@@ -1177,12 +1187,13 @@ function sectionContacts(camp) {
     <div class="panel wide">
       ${reloadHint}
       <div class="upload-zone" id="upload-zone">
-        <p>Перетащите файл или выберите на компьютере</p>
-        <p class="hint">Excel или CSV</p>
-        <button class="btn" type="button" id="pick-file" ${roAttr()}>Выбрать файл</button>
-        <input type="file" id="contact-file" accept=".csv,.xlsx,.xls" hidden ${roAttr()} />
-        <p class="hint consent">Загружая номера, вы подтверждаете, что у вас есть законные основания звонить этим людям. CallMate согласия за вас не собирает</p>
-        <p class="hint">Храните согласия и документы у себя</p>
+        <div class="upload-zone-main">
+          <p class="upload-zone-title">Перетащите файл или выберите на компьютере</p>
+          <p class="hint">Excel или CSV</p>
+          <button class="btn" type="button" id="pick-file" ${roAttr()}>Выбрать файл</button>
+          <input class="sr-file" type="file" id="contact-file" accept=".csv,.xlsx,.xls" tabindex="-1" aria-hidden="true" ${roAttr()} />
+        </div>
+        <p class="hint consent">Загружая номера, вы подтверждаете, что у вас есть законные основания звонить этим людям. CallMate согласия за вас не собирает. Храните согласия и документы у себя</p>
       </div>
       <p id="upload-progress" class="hint" hidden>Загружаем контакты…</p>
       <p class="hint" id="upload-progress-hint" hidden>Большой файл может занять несколько минут</p>
@@ -1192,20 +1203,23 @@ function sectionContacts(camp) {
       <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
       <div id="reload-precheck" class="panel nested" hidden></div>
       <div id="new-col-alert" class="panel nested" hidden></div>
-      ${filters}
-      ${
-        contacts.length
-          ? `<div class="row-actions">
-          <button class="btn secondary" type="button" id="cancel-contacts" ${roAttr()}>Снять с обзвона</button>
-          <button class="btn secondary" type="button" id="restore-contacts" ${roAttr()}>Вернуть в обзвон</button>
-        </div>
-        <p class="hint" id="contacts-action-msg"></p>`
-          : ""
-      }
-      <table class="data" id="contacts-table">
-        <thead><tr><th></th><th>Телефон</th><th>Статус</th><th>Имя</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div class="contacts-list-block">
+        <h3 class="contacts-list-title">Список</h3>
+        ${filters}
+        ${
+          contacts.length
+            ? `<div class="row-actions">
+            <button class="btn secondary" type="button" id="cancel-contacts" ${roAttr()}>Снять с обзвона</button>
+            <button class="btn secondary" type="button" id="restore-contacts" ${roAttr()}>Вернуть в обзвон</button>
+          </div>
+          <p class="hint" id="contacts-action-msg"></p>`
+            : ""
+        }
+        <table class="data data-contacts" id="contacts-table">
+          <thead><tr><th class="col-check"></th><th>Телефон</th><th>Статус</th><th>Имя</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
       ${
         started
           ? `<button class="btn secondary" type="button" id="reload-entry" ${roAttr()}>Догрузить файл</button>
