@@ -324,9 +324,10 @@ function roAttr() {
 }
 
 function themeControls() {
-  return `<div class="theme-switch">
-    <button class="btn secondary" data-theme-set="light" type="button">Светлая</button>
-    <button class="btn secondary" data-theme-set="dark" type="button">Тёмная</button>
+  const light = state.theme !== "dark";
+  return `<div class="theme-segmented" role="group" aria-label="Тема">
+    <button class="theme-seg${light ? " active" : ""}" data-theme-set="light" type="button" aria-pressed="${light ? "true" : "false"}">Светлая</button>
+    <button class="theme-seg${!light ? " active" : ""}" data-theme-set="dark" type="button" aria-pressed="${!light ? "true" : "false"}">Тёмная</button>
   </div>`;
 }
 
