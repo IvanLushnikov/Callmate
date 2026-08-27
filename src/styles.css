@@ -610,6 +610,12 @@ form.panel > .btn,
   gap: var(--s5);
 }
 
+.preview-slice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
 .preview-slice-context {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(14rem, 0.8fr);
