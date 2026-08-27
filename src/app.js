@@ -121,6 +121,7 @@ const state = {
     statusExpandKey: null,
     scheduleDrawerOpen: false,
     contactStatusFilter: "all",
+    contactOutcomeFilter: "all",
     generatePending: false,
     generateError: null,
   },
@@ -1483,16 +1484,46 @@ function sectionScenario(camp) {
   </section>`;
 }
 
+/** Исходы попытки v1 (DESIGN-138 / FE-155) — не статусы канона. */
+const OUTCOME_FILTERS = [
+  { id: "all", label: "Все", codes: null },
+  { id: "busy", label: "Занято", codes: ["busy"] },
+  { id: "no_pickup", label: "Не берёт", codes: ["no_pickup", "no_answer"] },
+  { id: "voicemail", label: "Автоответчик", codes: ["voicemail"] },
+  { id: "early", label: "Ранний сброс", codes: ["early", "early_hangup"] },
+];
+
+function contactCauseCode(contact) {
+  const attempts = contact.attempts || [];
+  if (attempts.length) {
+    const last = attempts[attempts.length - 1];
+    return last.cause_code || last.outcome || last.result || "";
+  }
+  const last = contact.last_attempt;
+  if (last) return last.cause_code || last.outcome || last.result || "";
+  return contact.cause_code || "";
+}
+
+function matchesOutcomeFilter(contact, outcomeFilterId) {
+  if (!outcomeFilterId || outcomeFilterId === "all") return true;
+  const spec = OUTCOME_FILTERS.find((f) => f.id === outcomeFilterId);
+  if (!spec?.codes) return true;
+  const code = contactCauseCode(contact);
+  return spec.codes.includes(code);
+}
+
 function sectionContacts(camp) {
   if (!camp) return "";
   const started = isStarted(camp);
   const contacts = camp.contacts || [];
   const warnings = camp.uploadWarnings || [];
   const filter = state.ui.contactStatusFilter || "all";
-  const filtered =
+  const outcomeFilter = state.ui.contactOutcomeFilter || "all";
+  const byStatus =
     filter === "all"
       ? contacts
       : contacts.filter((r) => r.status === STATUS[filter]);
+  const filtered = byStatus.filter((r) => matchesOutcomeFilter(r, outcomeFilter));
   const reloadHint = started
     ? `<p class="hint">Номера догрузить можно. Новое поле в сценарий — уже нет</p>`
     : "";
@@ -1511,6 +1542,17 @@ function sectionContacts(camp) {
         )
         .join("")}
     </div>`;
+  const outcomeFilters = `<div class="status-filters outcome-filters" role="tablist" aria-label="Исход попытки">
+      <span class="filter-label">Исход попытки</span>
+      ${OUTCOME_FILTERS.map(
+        (f) =>
+          `<button type="button" class="status-filter${outcomeFilter === f.id ? " active" : ""}" data-outcome-filter="${f.id}">${escapeHtml(f.label)}</button>`
+      ).join("")}
+    </div>`;
+  const emptyOutcome =
+    outcomeFilter !== "all" && !filtered.length && contacts.length
+      ? `<p class="hint" id="outcome-filter-empty">Нет номеров с таким исходом</p>`
+      : "";
   const rows = filtered.length
     ? filtered
         .map((r) => {
@@ -1549,6 +1591,8 @@ function sectionContacts(camp) {
     ? `<div class="contacts-list-block contacts-list-first">
         <h3 class="contacts-list-title">Список</h3>
         ${filters}
+        ${outcomeFilters}
+        ${emptyOutcome}
         <div class="row-actions">
           <button class="btn secondary" type="button" id="cancel-contacts" ${roAttr()}>Снять с обзвона</button>
           <button class="btn secondary" type="button" id="restore-contacts" ${roAttr()}>Вернуть в обзвон</button>
@@ -1744,13 +1788,14 @@ function outcomeLabel(code) {
   const map = {
     busy: "Занято",
     no_pickup: "Не берёт",
+    no_answer: "Не берёт",
     voicemail: "Автоответчик",
     early: "Ранний сброс",
+    early_hangup: "Ранний сброс",
     connected: "Дозвонились",
     answered_stub: "Дозвонились",
     answered_human: "Дозвонились",
     provider_down: "Сбой связи",
-    no_answer: "Недозвон",
     tech_fail: "Сбой связи",
   };
   return map[code] || code || "—";
@@ -3130,7 +3175,9 @@ async function refreshCampaignContacts(camp) {
     verdict: item.verdict ?? null,
     attempt_count: item.attempt_count ?? 0,
     last_transcript: item.last_transcript ?? null,
-    attempts: item.attempts || item.last_attempt ? [item.last_attempt].filter(Boolean) : [],
+    attempts: item.attempts || (item.last_attempt ? [item.last_attempt] : []),
+    last_attempt: item.last_attempt || null,
+    cause_code: item.cause_code || null,
   }));
   persistCampaigns();
 }
@@ -3477,13 +3524,23 @@ function bindStatuses() {
             status: item.status || STATUS.in_progress,
             attrs: item.attrs || {},
             verdict: item.verdict ?? null,
-            attempts: item.attempts || [],
+            attempts:
+              item.attempts ||
+              (item.last_attempt ? [item.last_attempt] : []),
+            last_attempt: item.last_attempt || null,
+            cause_code: item.cause_code || null,
           }));
           persistCampaigns();
         } catch (ex) {
           flash(errorMessage(ex?.code), "error");
         }
       }
+      render();
+    };
+  });
+  document.querySelectorAll("[data-outcome-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      state.ui.contactOutcomeFilter = btn.getAttribute("data-outcome-filter") || "all";
       render();
     };
   });

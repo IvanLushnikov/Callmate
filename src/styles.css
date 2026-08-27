@@ -1070,6 +1070,18 @@ button.ready-meta-item:hover {
   flex-wrap: wrap;
   gap: 0.4rem;
   margin: 0 0 var(--s3);
+  align-items: center;
+}
+
+.filter-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-right: 0.25rem;
+}
+
+.outcome-filters {
+  margin-top: calc(var(--s2) * -0.5);
 }
 
 .status-filter {
