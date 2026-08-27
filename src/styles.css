@@ -227,7 +227,7 @@ input:focus, select:focus, textarea:focus {
   padding: clamp(2rem, 6vw, 5rem);
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: center;
   overflow: hidden;
   isolation: isolate;
 }
