@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=21";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=22";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -114,7 +114,10 @@ const state = {
     telephonyPanel: null,
     showNewCampaign: false,
     adminExpandedId: null,
+    adminEditId: null,
+    adminDeleteId: null,
     adminLoaded: false,
+    contactsUploading: false,
     telephonyLoaded: false,
     campaignsLoaded: false,
     gateErrors: [],
@@ -456,17 +459,59 @@ function adminCompanyCardInline(c) {
   const lockedCo = c.access_status === "locked";
   const mins =
     c.price_per_minute > 0 ? Math.floor((c.balance || 0) / c.price_per_minute) : 0;
+  const editing = String(state.ui.adminEditId) === String(c.id);
+  const deleting = String(state.ui.adminDeleteId) === String(c.id);
+  const bal = Number(c.balance || 0);
   const hist = (c.history || [])
     .slice(-8)
     .reverse()
     .map((h) => `<li>${escapeHtml(h)}</li>`)
     .join("") || "<li class='hint'>Пока пусто</li>";
-  return `<div class="panel nested" data-company-card="${escapeHtml(c.id)}">
-    <p><strong>${escapeHtml(c.name)}</strong> · ${escapeHtml(c.login || "")}</p>
-    <p>Статус: ${lockedCo ? "Заблокирована" : "Активна"}</p>
-    <p>Баланс: ${escapeHtml(String(c.balance || 0))} ₽
-      <span class="hint">≈ ${mins} мин по тарифу</span></p>
-    <p>Тариф за минуту: ${escapeHtml(String(c.price_per_minute ?? "—"))}</p>
+  const editForm = editing
+    ? `<form id="edit-company-form" class="admin-edit-form" data-id="${escapeHtml(c.id)}">
+        <h3>Изменить компанию</h3>
+        <label>Название</label>
+        <input id="edit-company-name" type="text" required value="${escapeHtml(c.name || "")}" autocomplete="organization" />
+        <label>Логин</label>
+        <input id="edit-company-login" type="text" required value="${escapeHtml(c.login || "")}" autocomplete="username" />
+        <label>Новый пароль</label>
+        <input id="edit-company-password" type="password" value="" autocomplete="new-password" />
+        <p class="hint">Оставьте пустым, если пароль менять не нужно</p>
+        <div class="error" id="edit-company-error" hidden></div>
+        <p class="hint ok-line" id="edit-company-ok" hidden>Сохранено</p>
+        <div class="row-actions">
+          <button class="btn" type="submit">Сохранить</button>
+          <button class="btn secondary" type="button" id="edit-company-cancel">Отменить</button>
+        </div>
+      </form>`
+    : "";
+  const deleteModal = deleting
+    ? `<div class="modal-backdrop" id="delete-company-backdrop" role="presentation">
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-company-title">
+          <h3 id="delete-company-title">Удалить компанию?</h3>
+          <p>Компания, кабинет, кампании и номера будут удалены без восстановления.</p>
+          ${
+            bal > 0
+              ? `<label class="check-line"><input type="checkbox" id="delete-forfeit-balance" /> Списать остаток баланса: ${escapeHtml(String(bal))} ₽</label>`
+              : ""
+          }
+          <div class="error" id="delete-company-error" hidden></div>
+          <div class="row-actions">
+            <button class="btn secondary" type="button" id="delete-company-cancel" autofocus>Отменить</button>
+            <button class="btn danger" type="button" id="delete-company-confirm" data-id="${escapeHtml(c.id)}">Удалить</button>
+          </div>
+        </div>
+      </div>`
+    : "";
+  return `<div class="admin-company-card" data-company-card="${escapeHtml(c.id)}">
+    <div class="admin-company-head">
+      <p class="admin-company-title"><strong>${escapeHtml(c.name)}</strong> · ${escapeHtml(c.login || "")}</p>
+      <p class="admin-company-balance">${escapeHtml(String(bal))} ₽
+        <span class="hint">≈ ${mins} мин по тарифу</span></p>
+      <p class="hint">Тариф за минуту: ${escapeHtml(String(c.price_per_minute ?? "—"))}</p>
+      <p class="admin-company-status">Статус: ${lockedCo ? "Заблокирована" : "Активна"}</p>
+    </div>
+    ${editForm}
     <div class="nested-form" data-packages="${escapeHtml(c.id)}">
       <h3>Пакеты минут</h3>
       <p class="hint">Пополнение по пакету ставит тариф ступени. Уже лежащий баланс не пересчитываем.</p>
@@ -490,21 +535,30 @@ function adminCompanyCardInline(c) {
       <p class="hint ok-line" id="topup-ok" hidden>Баланс пополнен</p>
       <button class="btn" type="submit">Пополнить</button>
     </form>
-    <div class="row-actions">
+    <div class="row-actions admin-card-actions">
       <button class="btn secondary" type="button" id="change-tariff" data-id="${escapeHtml(c.id)}">Сменить тариф</button>
       <button class="btn secondary" type="button" id="open-cabinet" data-id="${escapeHtml(c.id)}">Открыть кабинет</button>
       <button class="btn secondary" type="button" id="toggle-lock" data-id="${escapeHtml(c.id)}">
         ${lockedCo ? "Разблокировать" : "Заблокировать"}
       </button>
+      <button class="btn secondary" type="button" id="edit-company" data-id="${escapeHtml(c.id)}">Изменить</button>
       <button class="btn secondary" type="button" data-collapse-company>Свернуть</button>
     </div>
-    <div id="lock-dialog" class="panel nested" hidden>
-      <p>Заблокировать компанию? Клиент сможет только смотреть. Обзвон остановится</p>
-      <button class="btn" type="button" id="lock-confirm" data-id="${escapeHtml(c.id)}">Заблокировать</button>
-      <button class="btn secondary" type="button" id="lock-cancel">Отмена</button>
+    <div class="admin-danger-row">
+      <button class="btn ghost danger-ghost" type="button" id="delete-company" data-id="${escapeHtml(c.id)}">Удалить компанию</button>
     </div>
-    <h3>История</h3>
-    <ul>${hist}</ul>
+    <div id="lock-dialog" class="admin-lock-dialog" hidden>
+      <p>Заблокировать компанию? Клиент сможет только смотреть. Обзвон остановится</p>
+      <div class="row-actions">
+        <button class="btn" type="button" id="lock-confirm" data-id="${escapeHtml(c.id)}">Заблокировать</button>
+        <button class="btn secondary" type="button" id="lock-cancel">Отмена</button>
+      </div>
+    </div>
+    <div class="admin-company-history">
+      <h3>История</h3>
+      <ul>${hist}</ul>
+    </div>
+    ${deleteModal}
   </div>`;
 }
 
@@ -1605,17 +1659,18 @@ function sectionContacts(camp) {
         .join("")
     : `<tr><td colspan="4"></td></tr>`;
 
-  const uploadZone = `<div class="upload-zone${contacts.length ? " upload-zone-quiet" : " upload-zone-empty"}" id="upload-zone">
+  const uploadZone = `<div class="upload-zone${contacts.length ? " upload-zone-quiet" : " upload-zone-empty"}${state.ui.contactsUploading ? " is-uploading" : ""}" id="upload-zone">
         <div class="upload-zone-main">
           <p class="upload-zone-title">${contacts.length ? "Догрузить файл" : "Загрузите контакты"}</p>
           <p class="hint">Excel или CSV</p>
-          <button class="btn${contacts.length ? " secondary" : ""}" type="button" id="pick-file" ${roAttr()}>Выбрать файл</button>
-          <input class="sr-file" type="file" id="contact-file" accept=".csv,.xlsx,.xls" tabindex="-1" aria-hidden="true" ${roAttr()} />
+          <button class="btn${contacts.length ? " secondary" : ""}" type="button" id="pick-file" ${roAttr()}${state.ui.contactsUploading ? " disabled" : ""}>Выбрать файл</button>
+          <input class="sr-file" type="file" id="contact-file" accept=".csv,.xlsx,.xls" tabindex="-1" aria-hidden="true" ${roAttr()} ${state.ui.contactsUploading ? "disabled" : ""} />
         </div>
         <p class="hint consent">Загружая номера, вы подтверждаете, что у вас есть законные основания звонить этим людям. CallMate согласия за вас не собирает. Храните согласия и документы у себя</p>
       </div>
-      <p id="upload-progress" class="hint" hidden>Загружаем контакты…</p>
-      <p class="hint" id="upload-progress-hint" hidden>Большой файл может занять несколько минут</p>
+      <p id="upload-progress" class="hint" ${state.ui.contactsUploading ? "" : "hidden"}>Загружаем контакты…</p>
+      <p class="hint" id="upload-progress-hint" ${state.ui.contactsUploading ? "" : "hidden"}>Большой файл может занять несколько минут</p>
+      <p class="hint" id="upload-batch-hint" ${state.ui.contactsUploading ? "" : "hidden"}>Файл обрабатывается на сервере пачками</p>
       <p class="hint ok-line" id="upload-ok" hidden>Контакты загружены</p>
       <div id="upload-errors"></div>
       ${warnings.map((w) => `<p class="error">${escapeHtml(w)}</p>`).join("")}
@@ -2374,6 +2429,8 @@ function bindAdminForms() {
       const id = btn.getAttribute("data-expand-company");
       const next = String(state.ui.adminExpandedId) === String(id) ? null : id;
       state.ui.adminExpandedId = next;
+      state.ui.adminEditId = null;
+      state.ui.adminDeleteId = null;
       if (next && hasApi()) {
         try {
           const card = await apiFetch(`/api/admin/companies/${encodeURIComponent(next)}`, {
@@ -2394,7 +2451,155 @@ function bindAdminForms() {
   if (collapse) {
     collapse.onclick = () => {
       state.ui.adminExpandedId = null;
+      state.ui.adminEditId = null;
+      state.ui.adminDeleteId = null;
       render();
+    };
+  }
+
+  const editCompanyBtn = document.getElementById("edit-company");
+  if (editCompanyBtn) {
+    editCompanyBtn.onclick = () => {
+      state.ui.adminEditId = editCompanyBtn.getAttribute("data-id");
+      state.ui.adminDeleteId = null;
+      render();
+    };
+  }
+  const editCancel = document.getElementById("edit-company-cancel");
+  if (editCancel) {
+    editCancel.onclick = () => {
+      state.ui.adminEditId = null;
+      render();
+    };
+  }
+  const editForm = document.getElementById("edit-company-form");
+  if (editForm) {
+    editForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const id = editForm.getAttribute("data-id");
+      const c = companyById(id);
+      if (!c) return;
+      const name = document.getElementById("edit-company-name")?.value?.trim() || "";
+      const login = document.getElementById("edit-company-login")?.value?.trim() || "";
+      const password = document.getElementById("edit-company-password")?.value || "";
+      const errEl = document.getElementById("edit-company-error");
+      const okEl = document.getElementById("edit-company-ok");
+      if (errEl) {
+        errEl.hidden = true;
+        errEl.textContent = "";
+      }
+      if (okEl) okEl.hidden = true;
+      if (!name || !login) {
+        if (errEl) {
+          errEl.hidden = false;
+          errEl.textContent = errorMessage("validation_error");
+        }
+        return;
+      }
+      const body = { name, login };
+      if (password) body.password = password;
+      try {
+        if (hasApi()) {
+          const res = await apiFetch(`/api/admin/companies/${encodeURIComponent(id)}`, {
+            method: "PATCH",
+            session: state.session,
+            body,
+          });
+          const mapped = mapAdminCompany(res);
+          state.companies = state.companies.map((row) =>
+            String(row.id) === String(id) ? { ...row, ...mapped } : row
+          );
+        } else {
+          if (state.companies.some((row) => row.login === login && String(row.id) !== String(id))) {
+            throw Object.assign(new Error("login_taken"), { code: "login_taken" });
+          }
+          c.name = name;
+          c.login = login;
+          persistCompanies();
+        }
+        state.ui.adminEditId = null;
+        flash("Сохранено");
+        render();
+      } catch (ex) {
+        if (errEl) {
+          errEl.hidden = false;
+          errEl.textContent = errorMessage(ex?.code);
+        } else {
+          flash(errorMessage(ex?.code), "error");
+        }
+      }
+    };
+  }
+
+  const deleteCompanyBtn = document.getElementById("delete-company");
+  if (deleteCompanyBtn) {
+    deleteCompanyBtn.onclick = () => {
+      state.ui.adminDeleteId = deleteCompanyBtn.getAttribute("data-id");
+      state.ui.adminEditId = null;
+      render();
+    };
+  }
+  const deleteCancel = document.getElementById("delete-company-cancel");
+  if (deleteCancel) {
+    deleteCancel.onclick = () => {
+      state.ui.adminDeleteId = null;
+      render();
+    };
+  }
+  const deleteBackdrop = document.getElementById("delete-company-backdrop");
+  if (deleteBackdrop) {
+    deleteBackdrop.onclick = (e) => {
+      if (e.target === deleteBackdrop) {
+        state.ui.adminDeleteId = null;
+        render();
+      }
+    };
+  }
+  const deleteConfirm = document.getElementById("delete-company-confirm");
+  if (deleteConfirm) {
+    deleteConfirm.onclick = async () => {
+      const id = deleteConfirm.getAttribute("data-id");
+      const c = companyById(id);
+      if (!c) return;
+      const bal = Number(c.balance || 0);
+      const forfeitEl = document.getElementById("delete-forfeit-balance");
+      const errEl = document.getElementById("delete-company-error");
+      if (errEl) {
+        errEl.hidden = true;
+        errEl.textContent = "";
+      }
+      if (bal > 0 && !(forfeitEl && forfeitEl.checked)) {
+        if (errEl) {
+          errEl.hidden = false;
+          errEl.textContent = errorMessage("balance_not_zero");
+        }
+        return;
+      }
+      const body = { confirm: true };
+      if (bal > 0) body.confirm_forfeit_balance = true;
+      try {
+        if (hasApi()) {
+          await apiFetch(`/api/admin/companies/${encodeURIComponent(id)}`, {
+            method: "DELETE",
+            session: state.session,
+            body,
+          });
+        }
+        state.companies = state.companies.filter((row) => String(row.id) !== String(id));
+        persistCompanies();
+        state.ui.adminExpandedId = null;
+        state.ui.adminDeleteId = null;
+        state.ui.adminEditId = null;
+        flash("Компания удалена");
+        render();
+      } catch (ex) {
+        if (errEl) {
+          errEl.hidden = false;
+          errEl.textContent = errorMessage(ex?.code);
+        } else {
+          flash(errorMessage(ex?.code), "error");
+        }
+      }
     };
   }
 
@@ -3413,24 +3618,36 @@ async function refreshCampaignContacts(camp) {
 }
 
 async function uploadContactsFile(file) {
-  if (!file || locked()) return;
+  if (!file || locked() || state.ui.contactsUploading) return;
   const camp = workspaceCampaign() || activeCampaign();
   if (!camp) return;
 
+  state.ui.contactsUploading = true;
+  // Paint progress before long fetch so UI does not look frozen (FE-161).
+  render();
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
   const progress = document.getElementById("upload-progress");
   const hint = document.getElementById("upload-progress-hint");
+  const batchHint = document.getElementById("upload-batch-hint");
   const ok = document.getElementById("upload-ok");
   const errors = document.getElementById("upload-errors");
-  progress.hidden = false;
-  progress.textContent = "Загружаем контакты…";
-  hint.hidden = false;
-  ok.hidden = true;
-  errors.innerHTML = "";
+  if (progress) {
+    progress.hidden = false;
+    progress.textContent = "Загружаем контакты…";
+  }
+  if (hint) hint.hidden = false;
+  if (batchHint) batchHint.hidden = false;
+  if (ok) ok.hidden = true;
+  if (errors) errors.innerHTML = "";
 
   if (!hasApi()) {
-    progress.hidden = true;
-    hint.hidden = true;
-    errors.innerHTML = `<p class="error">${escapeHtml(errorMessage("api_not_configured"))}</p>`;
+    state.ui.contactsUploading = false;
+    if (progress) progress.hidden = true;
+    if (hint) hint.hidden = true;
+    if (batchHint) batchHint.hidden = true;
+    if (errors) errors.innerHTML = `<p class="error">${escapeHtml(errorMessage("api_not_configured"))}</p>`;
+    render();
     return;
   }
 
@@ -3441,15 +3658,18 @@ async function uploadContactsFile(file) {
       `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/upload`,
       { method: "POST", session: state.session, body: fd }
     );
-    progress.hidden = true;
-    hint.hidden = true;
+    state.ui.contactsUploading = false;
+    if (progress) progress.hidden = true;
+    if (hint) hint.hidden = true;
+    if (batchHint) batchHint.hidden = true;
     if (result?.mode === "draft") {
+      render();
       showServerReloadDraft(camp, result);
       return;
     }
     const rejected = result?.rejected || [];
     const warnings = result?.warnings || [];
-    if (rejected.length) {
+    if (rejected.length && errors) {
       errors.innerHTML = rejected
         .slice(0, 8)
         .map(
@@ -3462,23 +3682,28 @@ async function uploadContactsFile(file) {
       camp.uploadWarnings = warnings.map((w) => (typeof w === "string" ? w : w.message || String(w)));
     }
     await refreshCampaignContacts(camp);
-    ok.hidden = false;
-    ok.textContent =
-      result?.accepted != null ? `Контакты загружены: ${result.accepted}` : "Контакты загружены";
     render();
+    const okEl = document.getElementById("upload-ok");
+    if (okEl) {
+      okEl.hidden = false;
+      okEl.textContent =
+        result?.accepted != null ? `Контакты загружены: ${result.accepted}` : "Контакты загружены";
+    }
   } catch (ex) {
-    progress.hidden = true;
-    hint.hidden = true;
+    state.ui.contactsUploading = false;
+    render();
+    const errBox = document.getElementById("upload-errors");
     const code = ex?.code;
+    if (!errBox) return;
     if (code === "unsupported_format") {
-      errors.innerHTML = `<p class="error">${escapeHtml(errorMessage("unsupported_format"))}</p>`;
+      errBox.innerHTML = `<p class="error">${escapeHtml(errorMessage("unsupported_format"))}</p>`;
     } else if (code === "file_too_large") {
-      errors.innerHTML = `<p class="error">Файл слишком большой</p>`;
+      errBox.innerHTML = `<p class="error">${escapeHtml(errorMessage("file_too_large"))}</p>`;
     } else if (code === "missing_columns") {
-      errors.innerHTML = `<p class="error">Не нашли нужные колонки</p>
+      errBox.innerHTML = `<p class="error">Не нашли нужные колонки</p>
         <p class="hint">Нужен столбец с телефоном</p>`;
     } else {
-      errors.innerHTML = `<p class="error">${escapeHtml(errorMessage(code))}</p>`;
+      errBox.innerHTML = `<p class="error">${escapeHtml(errorMessage(code))}</p>`;
     }
   }
 }

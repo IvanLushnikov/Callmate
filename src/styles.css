@@ -201,6 +201,18 @@ input:focus, select:focus, textarea:focus {
   border-color: transparent;
 }
 
+.btn.danger-ghost {
+  background: transparent;
+  color: var(--danger);
+  border-color: transparent;
+  min-height: 2.2rem;
+  padding: 0 0.7rem;
+}
+
+.btn.danger-ghost:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
 .btn.ghost:hover {
   color: var(--ink);
   background: color-mix(in srgb, var(--ink) 4%, transparent);
@@ -1423,6 +1435,106 @@ button.linkish {
 button.linkish:hover { text-decoration: underline; }
 
 .expand-row td { padding-top: 0.2rem; padding-bottom: var(--s3); }
+
+/* FE-180 / VIS-230: admin company card density */
+.admin-company-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--s4);
+  box-shadow: none;
+}
+
+.admin-company-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  margin-bottom: var(--s3);
+}
+
+.admin-company-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.admin-company-balance {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.admin-company-balance .hint {
+  font-size: 0.86rem;
+  font-weight: 500;
+  margin-left: 0.35rem;
+}
+
+.admin-company-status {
+  margin: 0;
+}
+
+.admin-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: 0 0 var(--s3);
+  padding: var(--s3) 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-edit-form h3 {
+  margin: 0;
+}
+
+.admin-card-actions {
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+.admin-danger-row {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+.admin-lock-dialog {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
+.admin-company-history {
+  margin-top: var(--s4);
+  padding: var(--s3);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.admin-company-history h3 {
+  margin: 0 0 var(--s2);
+}
+
+.admin-company-history ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.check-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: var(--s3) 0;
+  font-size: 0.95rem;
+}
+
+.upload-zone.is-uploading {
+  opacity: 0.72;
+  pointer-events: none;
+}
 .nested-form { margin: var(--s2) 0; }
 .contact-drawer h4 { margin: var(--s3) 0 var(--s1); font-size: 0.95rem; }
 .lines-block { margin-top: var(--s3); }
