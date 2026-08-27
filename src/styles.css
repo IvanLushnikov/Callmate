@@ -1120,6 +1120,35 @@ button.ready-meta-item:hover {
   background: rgba(11, 18, 32, 0.38);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s4);
+  background: rgba(11, 18, 32, 0.45);
+}
+
+.modal-dialog {
+  width: min(28rem, 100%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--s4);
+}
+
+.modal-dialog h3 {
+  margin: 0 0 var(--s2);
+}
+
+.modal-dialog p {
+  margin: 0 0 var(--s3);
+  color: var(--muted);
+}
+
 .drawer {
   position: fixed;
   top: 0;

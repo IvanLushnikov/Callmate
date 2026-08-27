@@ -124,6 +124,8 @@ const state = {
     contactOutcomeFilter: "all",
     generatePending: false,
     generateError: null,
+    saveRebuildOpen: false,
+    pendingPreviewSave: null,
   },
   adminSettings: {
     batch_interval_sec: Number(localStorage.getItem("cm_interval") || "30"),
@@ -1174,6 +1176,20 @@ function campaignWorkspace(camp) {
         <button class="btn secondary" type="button" id="stop-no">Отмена</button>
       </div>
     </div>
+    ${
+      state.ui.saveRebuildOpen
+        ? `<div class="modal-backdrop" id="save-rebuild-backdrop" role="presentation">
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="save-rebuild-title">
+        <h3 id="save-rebuild-title">Пересобрать сценарий?</h3>
+        <p>Сохранение заново соберёт превью и этапы. Ручные правки в них пропадут.</p>
+        <div class="row-actions">
+          <button class="btn secondary" type="button" id="save-rebuild-cancel" autofocus>Отмена</button>
+          <button class="btn" type="button" id="save-rebuild-yes">Пересобрать и сохранить</button>
+        </div>
+      </div>
+    </div>`
+        : ""
+    }
     ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
     <p class="hint meta-line"><a href="#/cabinet/tariffs">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</a></p>
 
@@ -2560,6 +2576,55 @@ function bindAdminForms() {
   }
 }
 
+function hasAssembledScenario(camp) {
+  if (!camp) return false;
+  const p = camp.preview || {};
+  const hasPreview = Boolean(
+    (p.greeting || "").trim() ||
+      (p.says || "").trim() ||
+      (p.replies || "").trim() ||
+      (p.tone || "").trim()
+  );
+  const hasStages = Array.isArray(camp.stages) && camp.stages.length > 0;
+  const hasScenario = Boolean((camp.scenarioText || camp.scenario_text || "").trim());
+  return hasPreview || hasStages || hasScenario;
+}
+
+async function performPreviewSave(camp, { name, goal, details }) {
+  camp.name = name;
+  camp.goal = goal;
+  camp.details = details;
+  state.ui.generateError = null;
+  try {
+    if (hasApi()) {
+      state.ui.generatePending = true;
+      render();
+      const updated = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}`, {
+        method: "PATCH",
+        session: state.session,
+        body: { goal, details },
+      });
+      Object.assign(camp, mapCampaignFromApi(updated, camp));
+      state.ui.generatePending = false;
+    } else {
+      camp.verdicts = ensureVerdicts(camp);
+      camp.preview = mergePreviewDefaults(camp);
+      if (!camp.scenarioText) camp.scenarioText = camp.preview.says;
+    }
+    persistCampaigns();
+    flash(hasApi() ? "Сценарий собран" : "Превью сохранено");
+    render();
+  } catch (ex) {
+    state.ui.generatePending = false;
+    const code = ex?.code;
+    if (isGenerateErrorCode(code)) {
+      state.ui.generateError = errorMessage(code);
+    }
+    flash(errorMessage(code), "error");
+    render();
+  }
+}
+
 function bindCampaignForms() {
   const previewForm = document.getElementById("preview-form");
   if (previewForm) {
@@ -2578,41 +2643,51 @@ function bindCampaignForms() {
         flash("Допишите сведения", "error");
         return;
       }
-      camp.name = name;
-      camp.goal = goal;
-      camp.details = details;
-      state.ui.generateError = null;
-      try {
-        if (hasApi()) {
-          state.ui.generatePending = true;
-          render();
-          const updated = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}`, {
-            method: "PATCH",
-            session: state.session,
-            body: { goal, details },
-          });
-          Object.assign(camp, mapCampaignFromApi(updated, camp));
-          state.ui.generatePending = false;
-        } else {
-          camp.verdicts = ensureVerdicts(camp);
-          camp.preview = mergePreviewDefaults(camp);
-          if (!camp.scenarioText) camp.scenarioText = camp.preview.says;
-        }
-        persistCampaigns();
-        const ok = document.getElementById("preview-ok");
-        if (ok) ok.hidden = false;
-        flash(hasApi() ? "Сценарий собран" : "Превью сохранено");
+      if (hasAssembledScenario(camp)) {
+        state.ui.pendingPreviewSave = { name, goal, details };
+        state.ui.saveRebuildOpen = true;
         render();
-      } catch (ex) {
-        state.ui.generatePending = false;
-        const code = ex?.code;
-        if (isGenerateErrorCode(code)) {
-          state.ui.generateError = errorMessage(code);
-        }
-        flash(errorMessage(code), "error");
-        render();
+        return;
       }
+      await performPreviewSave(camp, { name, goal, details });
     };
+  }
+
+  const rebuildCancel = document.getElementById("save-rebuild-cancel");
+  const rebuildBackdrop = document.getElementById("save-rebuild-backdrop");
+  const closeRebuild = () => {
+    state.ui.saveRebuildOpen = false;
+    state.ui.pendingPreviewSave = null;
+    render();
+  };
+  if (rebuildCancel) rebuildCancel.onclick = closeRebuild;
+  if (rebuildBackdrop) {
+    rebuildBackdrop.onclick = (ev) => {
+      if (ev.target === rebuildBackdrop) closeRebuild();
+    };
+  }
+  const rebuildYes = document.getElementById("save-rebuild-yes");
+  if (rebuildYes) {
+    rebuildYes.onclick = async () => {
+      const camp = workspaceCampaign();
+      const payload = state.ui.pendingPreviewSave;
+      state.ui.saveRebuildOpen = false;
+      state.ui.pendingPreviewSave = null;
+      if (!camp || !payload) {
+        render();
+        return;
+      }
+      await performPreviewSave(camp, payload);
+    };
+  }
+  if (state.ui.saveRebuildOpen) {
+    const onKey = (ev) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      document.removeEventListener("keydown", onKey);
+      closeRebuild();
+    };
+    document.addEventListener("keydown", onKey);
   }
 
   const newCampaignForm = document.getElementById("new-campaign-form");
