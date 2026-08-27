@@ -126,6 +126,8 @@ const state = {
     generateError: null,
     saveRebuildOpen: false,
     pendingPreviewSave: null,
+    contactSelectAll: false,
+    contactsBulkConfirm: null,
   },
   adminSettings: {
     batch_interval_sec: Number(localStorage.getItem("cm_interval") || "30"),
@@ -1190,6 +1192,20 @@ function campaignWorkspace(camp) {
     </div>`
         : ""
     }
+    ${
+      state.ui.contactsBulkConfirm
+        ? `<div class="modal-backdrop" id="contacts-bulk-backdrop" role="presentation">
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="contacts-bulk-title">
+        <h3 id="contacts-bulk-title">${escapeHtml(state.ui.contactsBulkConfirm.title)}</h3>
+        <p>${escapeHtml(state.ui.contactsBulkConfirm.body)}</p>
+        <div class="row-actions">
+          <button class="btn secondary" type="button" id="contacts-bulk-cancel" autofocus>Отмена</button>
+          <button class="btn" type="button" id="contacts-bulk-yes">${escapeHtml(state.ui.contactsBulkConfirm.ok)}</button>
+        </div>
+      </div>
+    </div>`
+        : ""
+    }
     ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
     <p class="hint meta-line"><a href="#/cabinet/tariffs">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</a></p>
 
@@ -1575,7 +1591,7 @@ function sectionContacts(camp) {
           const key = `${camp.id}|${r.phone}`;
           const open = state.ui.statusExpandKey === key;
           return `<tr>
-              <td><input type="checkbox" class="contact-check" data-phone="${escapeHtml(r.phone)}" ${roAttr()} /></td>
+              <td><input type="checkbox" class="contact-check" data-phone="${escapeHtml(r.phone)}" data-id="${escapeHtml(r.id || "")}" ${roAttr()} /></td>
               <td><button type="button" class="linkish" data-expand-status="${escapeHtml(key)}">${escapeHtml(maskPhone(r.phone))}</button></td>
               <td>${escapeHtml(statusLabel(r.status))}</td>
               <td>${escapeHtml(r.name || "")}</td>
@@ -1609,13 +1625,20 @@ function sectionContacts(camp) {
         ${filters}
         ${outcomeFilters}
         ${emptyOutcome}
+        <div class="contacts-bulk-bar">
+          <p class="hint" id="contacts-selected-count">Выбрано: 0</p>
+          <button class="btn secondary" type="button" id="contacts-clear-selection" hidden>Снять выделение</button>
+        </div>
         <div class="row-actions">
-          <button class="btn secondary" type="button" id="cancel-contacts" ${roAttr()}>Снять с обзвона</button>
-          <button class="btn secondary" type="button" id="restore-contacts" ${roAttr()}>Вернуть в обзвон</button>
+          <button class="btn secondary" type="button" id="cancel-contacts" ${roAttr()} disabled>Снять с обзвона</button>
+          <button class="btn secondary" type="button" id="restore-contacts" ${roAttr()} disabled>Вернуть в обзвон</button>
         </div>
         <p class="hint" id="contacts-action-msg"></p>
         <table class="data data-contacts" id="contacts-table">
-          <thead><tr><th class="col-check"></th><th>Телефон</th><th>Статус</th><th>Имя</th></tr></thead>
+          <thead><tr>
+            <th class="col-check"><input type="checkbox" id="contacts-select-all" title="Выбрать все" aria-label="Выбрать все" ${roAttr()} /></th>
+            <th>Телефон</th><th>Статус</th><th>Имя</th>
+          </tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`
@@ -3157,80 +3180,206 @@ function bindContacts() {
 
   const camp = workspaceCampaign() || activeCampaign();
 
+  function selectedContactRows() {
+    return [...document.querySelectorAll(".contact-check:checked")].map((el) => ({
+      phone: el.getAttribute("data-phone"),
+      id: el.getAttribute("data-id"),
+    }));
+  }
+
+  function syncContactsSelectionUi() {
+    const checks = [...document.querySelectorAll(".contact-check")];
+    const selected = checks.filter((c) => c.checked);
+    const countEl = document.getElementById("contacts-selected-count");
+    const clearBtn = document.getElementById("contacts-clear-selection");
+    const cancelBtn = document.getElementById("cancel-contacts");
+    const restoreBtn = document.getElementById("restore-contacts");
+    const selectAll = document.getElementById("contacts-select-all");
+    const n = selected.length;
+    if (countEl) countEl.textContent = `Выбрано: ${n}`;
+    if (clearBtn) clearBtn.hidden = n === 0;
+    if (cancelBtn) cancelBtn.disabled = n === 0 || locked();
+    if (restoreBtn) restoreBtn.disabled = n === 0 || locked();
+    if (selectAll && checks.length) {
+      selectAll.checked = n === checks.length;
+      selectAll.indeterminate = n > 0 && n < checks.length;
+    }
+  }
+
+  const selectAll = document.getElementById("contacts-select-all");
+  if (selectAll) {
+    selectAll.onchange = () => {
+      document.querySelectorAll(".contact-check").forEach((c) => {
+        c.checked = selectAll.checked;
+      });
+      syncContactsSelectionUi();
+    };
+  }
+  document.querySelectorAll(".contact-check").forEach((c) => {
+    c.onchange = () => syncContactsSelectionUi();
+  });
+  const clearSel = document.getElementById("contacts-clear-selection");
+  if (clearSel) {
+    clearSel.onclick = () => {
+      document.querySelectorAll(".contact-check").forEach((c) => {
+        c.checked = false;
+      });
+      const all = document.getElementById("contacts-select-all");
+      if (all) {
+        all.checked = false;
+        all.indeterminate = false;
+      }
+      syncContactsSelectionUi();
+    };
+  }
+  syncContactsSelectionUi();
+
+  async function runCancelSelected(selected) {
+    const msg = document.getElementById("contacts-action-msg");
+    let done = 0;
+    let skipped = 0;
+    try {
+      for (const row of selected) {
+        const ct = camp.contacts.find((c) => c.phone === row.phone || (row.id && c.id === row.id));
+        if (!ct || ct.status === STATUS.cancel) {
+          skipped += 1;
+          continue;
+        }
+        if (hasApi()) {
+          if (!ct.id) {
+            skipped += 1;
+            continue;
+          }
+          await apiFetch(
+            `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/cancel`,
+            { method: "POST", session: state.session }
+          );
+        }
+        ct.status = STATUS.cancel;
+        done += 1;
+      }
+      persistCampaigns();
+      if (msg) {
+        msg.textContent =
+          skipped && done ? `Сняли: ${done}. Пропустили: ${skipped}` : done ? "Сняли с обзвона" : "Выберите номера";
+      }
+      state.ui.contactsBulkConfirm = null;
+      render();
+    } catch (ex) {
+      flash(errorMessage(ex?.code), "error");
+    }
+  }
+
+  async function runRestoreSelected(selected) {
+    const msg = document.getElementById("contacts-action-msg");
+    let done = 0;
+    let skipped = 0;
+    try {
+      for (const row of selected) {
+        const ct = camp.contacts.find((c) => c.phone === row.phone || (row.id && c.id === row.id));
+        if (!ct || ct.status !== STATUS.cancel) {
+          skipped += 1;
+          continue;
+        }
+        if (hasApi()) {
+          if (!ct.id) {
+            skipped += 1;
+            continue;
+          }
+          await apiFetch(
+            `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/restore`,
+            { method: "POST", session: state.session }
+          );
+        }
+        ct.status = STATUS.in_progress;
+        done += 1;
+      }
+      persistCampaigns();
+      if (msg) {
+        msg.textContent =
+          skipped && done ? `Вернули: ${done}. Пропустили: ${skipped}` : done ? "Вернули в обзвон" : "Выберите номера";
+      }
+      state.ui.contactsBulkConfirm = null;
+      render();
+    } catch (ex) {
+      flash(errorMessage(ex?.code), "error");
+    }
+  }
+
   const cancelBtn = document.getElementById("cancel-contacts");
   if (cancelBtn && camp) {
-    cancelBtn.onclick = async () => {
-      const selected = [...document.querySelectorAll(".contact-check:checked")].map((el) => ({
-        phone: el.getAttribute("data-phone"),
-        id: el.getAttribute("data-id"),
-      }));
+    cancelBtn.onclick = () => {
+      const selected = selectedContactRows();
       const msg = document.getElementById("contacts-action-msg");
       if (!selected.length) {
-        msg.textContent = "Выберите номера";
+        if (msg) msg.textContent = "Выберите номера";
         return;
       }
-      if (!confirm("Снять выбранные номера с обзвона?")) return;
-      try {
-        if (hasApi()) {
-          for (const row of selected) {
-            const ct = camp.contacts.find((c) => c.phone === row.phone || c.id === row.id);
-            if (!ct?.id) continue;
-            await apiFetch(
-              `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/cancel`,
-              { method: "POST", session: state.session }
-            );
-            ct.status = STATUS.cancel;
-          }
-        } else {
-          for (const p of selected) {
-            const row = camp.contacts.find((c) => c.phone === p.phone);
-            if (row) row.status = STATUS.cancel;
-          }
-        }
-        persistCampaigns();
-        msg.textContent = "Сняли с обзвона";
-        render();
-      } catch (ex) {
-        flash(errorMessage(ex?.code), "error");
-      }
+      const applicable = selected.filter((row) => {
+        const ct = camp.contacts.find((c) => c.phone === row.phone || (row.id && c.id === row.id));
+        return ct && ct.status !== STATUS.cancel;
+      });
+      const n = applicable.length || selected.length;
+      state.ui.contactsBulkConfirm = {
+        kind: "cancel",
+        title: "Снять с обзвона?",
+        body: `Снять выбранные номера с обзвона? По ним не будем звонить, пока не вернёте.`,
+        ok: "Снять",
+        selected,
+        count: n,
+      };
+      render();
     };
   }
   const restoreBtn = document.getElementById("restore-contacts");
   if (restoreBtn && camp) {
-    restoreBtn.onclick = async () => {
-      const selected = [...document.querySelectorAll(".contact-check:checked")].map((el) => ({
-        phone: el.getAttribute("data-phone"),
-        id: el.getAttribute("data-id"),
-      }));
+    restoreBtn.onclick = () => {
+      const selected = selectedContactRows();
       const msg = document.getElementById("contacts-action-msg");
       if (!selected.length) {
-        msg.textContent = "Выберите номера";
+        if (msg) msg.textContent = "Выберите номера";
         return;
       }
-      try {
-        if (hasApi()) {
-          for (const row of selected) {
-            const ct = camp.contacts.find((c) => c.phone === row.phone || c.id === row.id);
-            if (!ct?.id) continue;
-            await apiFetch(
-              `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/restore`,
-              { method: "POST", session: state.session }
-            );
-            ct.status = STATUS.in_progress;
-          }
-        } else {
-          for (const p of selected) {
-            const row = camp.contacts.find((c) => c.phone === p.phone);
-            if (row && row.status === STATUS.cancel) row.status = STATUS.in_progress;
-          }
-        }
-        persistCampaigns();
-        msg.textContent = "Вернули в обзвон";
-        render();
-      } catch (ex) {
-        flash(errorMessage(ex?.code), "error");
-      }
+      state.ui.contactsBulkConfirm = {
+        kind: "restore",
+        title: "Вернуть в обзвон?",
+        body: "Вернуть выбранные номера в обзвон?",
+        ok: "Вернуть",
+        selected,
+      };
+      render();
     };
+  }
+
+  const bulkCancel = document.getElementById("contacts-bulk-cancel");
+  const bulkBackdrop = document.getElementById("contacts-bulk-backdrop");
+  const closeBulk = () => {
+    state.ui.contactsBulkConfirm = null;
+    render();
+  };
+  if (bulkCancel) bulkCancel.onclick = closeBulk;
+  if (bulkBackdrop) {
+    bulkBackdrop.onclick = (ev) => {
+      if (ev.target === bulkBackdrop) closeBulk();
+    };
+  }
+  const bulkYes = document.getElementById("contacts-bulk-yes");
+  if (bulkYes && state.ui.contactsBulkConfirm) {
+    bulkYes.onclick = async () => {
+      const conf = state.ui.contactsBulkConfirm;
+      if (!conf || !camp) return;
+      if (conf.kind === "cancel") await runCancelSelected(conf.selected);
+      else if (conf.kind === "restore") await runRestoreSelected(conf.selected);
+    };
+  }
+  if (state.ui.contactsBulkConfirm) {
+    const onKey = (ev) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      document.removeEventListener("keydown", onKey);
+      closeBulk();
+    };
+    document.addEventListener("keydown", onKey);
   }
 
   const reloadEntry = document.getElementById("reload-entry");

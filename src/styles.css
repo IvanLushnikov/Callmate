@@ -1113,6 +1113,18 @@ button.ready-meta-item:hover {
   padding: var(--s3) var(--s4);
 }
 
+.contacts-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 var(--s2);
+}
+
+.contacts-bulk-bar .hint {
+  margin: 0;
+}
+
 .drawer-backdrop {
   position: fixed;
   inset: 0;
