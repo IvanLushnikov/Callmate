@@ -195,6 +195,17 @@ input:focus, select:focus, textarea:focus {
   padding: 0 0.7rem;
 }
 
+.btn.danger {
+  background: var(--danger);
+  color: #fff;
+  border-color: transparent;
+}
+
+.btn.ghost:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
 .error { color: var(--danger); margin-top: var(--s2); font-weight: 600; font-size: 0.9rem; }
 .hint { color: var(--muted); font-size: 0.86rem; line-height: 1.45; }
 .ok-line { color: var(--ok); font-weight: 600; }
@@ -483,11 +494,10 @@ form.panel > .btn,
   gap: var(--s3);
   width: auto;
   max-width: 22rem;
-  padding: var(--s4) var(--s5);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  padding: var(--s5) var(--s4);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
 }
 
 .empty-state p {
@@ -1254,11 +1264,11 @@ button.ready-meta-item:hover {
 
 .upload-zone {
   position: relative;
-  border: 1px solid var(--line);
+  border: 1px dashed var(--line);
   border-radius: var(--radius-sm);
-  padding: var(--s4);
+  padding: var(--s5);
   margin: var(--s3) 0 0;
-  background: var(--surface-2);
+  background: transparent;
   display: flex;
   flex-direction: column;
   gap: var(--s3);
@@ -1360,7 +1370,7 @@ table.data {
 table.data th,
 table.data td {
   text-align: left;
-  padding: 0.75rem 0.5rem;
+  padding: var(--s3) var(--s2);
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
@@ -1371,6 +1381,14 @@ table.data th {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+table.data tbody tr:hover td {
+  background: var(--surface-2);
+}
+
+table.data tbody tr:has(.linkish):hover {
+  cursor: pointer;
 }
 
 .panel.wide .data a,
