@@ -1082,8 +1082,10 @@ function readinessStripHtml(camp) {
     readyClass = "ready-warn";
   } else if (!canLaunch) {
     readyTitle = "Нельзя";
-    const first = reasons[0];
-    const more = reasons.slice(1, 3);
+    const shown = reasons.slice(0, 2);
+    const rest = reasons.length - shown.length;
+    const first = shown[0];
+    const more = shown.slice(1);
     readyBody = first
       ? `<div class="ready-cta-wrap">
           ${reasonCtaHtml(first)}
@@ -1092,6 +1094,7 @@ function readinessStripHtml(camp) {
               ? `<div class="ready-reasons">${more.map((r) => reasonLinkHtml(r)).join("")}</div>`
               : ""
           }
+          ${rest > 0 ? `<p class="ready-hint">ещё ${rest}</p>` : ""}
         </div>`
       : `<p class="ready-hint">Нельзя запустить</p>`;
     readyClass = "ready-warn";
