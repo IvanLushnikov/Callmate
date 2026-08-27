@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout } from "./api.js?v=14";
+import { login as apiLogin, logout as apiLogout } from "./api.js?v=15";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -524,11 +524,18 @@ function emptyCampaign(partial = {}) {
 }
 
 function buildPreview(camp) {
+  const goal = (camp.goal || "").trim();
+  const details = (camp.details || "").trim();
   const nameHint = "Если имени нет — робот его не говорит";
+  const repliesDefault = goal
+    ? `Отвечает коротко по сути вопроса. Цель звонка: ${goal}`
+    : "Отвечает коротко по сути вопроса";
   return {
+    goal,
+    details,
     greeting: (camp.preview?.greeting ?? "").trim() || `Здравствуйте! ${nameHint}`,
-    says: (camp.preview?.says ?? "").trim() || (camp.details || camp.goal || "Сначала сохраните цель и сведения"),
-    replies: (camp.preview?.replies ?? "").trim() || "Отвечает коротко по сути вопроса",
+    says: (camp.preview?.says ?? "").trim() || details || goal || "Сначала сохраните цель и сведения",
+    replies: (camp.preview?.replies ?? "").trim() || repliesDefault,
     tone: (camp.preview?.tone ?? "").trim() || "Спокойно и по делу, без давления оформить любой ценой",
   };
 }
@@ -957,6 +964,8 @@ function blockGoalContext(camp) {
 function blockBotPreview(camp, weak, started) {
   const preview = buildPreview(camp);
   const dis = started || locked() ? "disabled" : "";
+  const goalVal = camp.goal || preview.goal || "";
+  const detailsVal = camp.details || preview.details || "";
   return `<section class="flow-section" id="sec-preview">
     <h2>Робот так понял сценарий</h2>
     <form class="panel wide preview-panel" id="preview-form">
@@ -969,22 +978,41 @@ function blockBotPreview(camp, weak, started) {
           : ""
       }
       <p class="hint preview-lead">Можно править каждый блок. Если имени нет — робот его не говорит</p>
-      <div class="preview-edit-grid">
-        <div class="preview-field">
-          <label for="preview-greeting">Приветствие</label>
-          <textarea id="preview-greeting" rows="3" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
+
+      <div class="preview-prompt">
+        <div class="preview-slice">
+          <div class="preview-field preview-field-full">
+            <label for="preview-goal">Цель звонка</label>
+            <textarea id="preview-goal" rows="2" ${dis} placeholder="Например: напомнить о записи">${escapeHtml(goalVal)}</textarea>
+            <p class="hint">К чему должен привести разговор</p>
+          </div>
+          <div class="preview-field preview-field-full">
+            <label for="preview-details">Сведения</label>
+            <textarea id="preview-details" rows="5" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
+            <p class="hint">Что роботу знать о продукте и ситуации</p>
+          </div>
         </div>
-        <div class="preview-field">
-          <label for="preview-says">Что говорит</label>
-          <textarea id="preview-says" rows="3" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
-        </div>
-        <div class="preview-field">
-          <label for="preview-replies">Как отвечает</label>
-          <textarea id="preview-replies" rows="3" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
-        </div>
-        <div class="preview-field">
-          <label for="preview-tone">Тон</label>
-          <textarea id="preview-tone" rows="3" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
+
+        <div class="preview-slice">
+          <div class="preview-edit-grid">
+            <div class="preview-field">
+              <label for="preview-greeting">Приветствие</label>
+              <textarea id="preview-greeting" rows="4" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
+            </div>
+            <div class="preview-field">
+              <label for="preview-says">Что говорит</label>
+              <textarea id="preview-says" rows="4" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
+            </div>
+            <div class="preview-field">
+              <label for="preview-replies">Как отвечает</label>
+              <textarea id="preview-replies" rows="5" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
+            </div>
+            <div class="preview-field">
+              <label for="preview-tone">Тон</label>
+              <textarea id="preview-tone" rows="4" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
+              <p class="hint">Без давления оформить любой ценой</p>
+            </div>
+          </div>
         </div>
       </div>
       ${
@@ -1975,20 +2003,34 @@ function bindCampaignForms() {
       e.preventDefault();
       const camp = workspaceCampaign();
       if (!camp || isStarted(camp) || locked()) return;
+      const goal = document.getElementById("preview-goal").value.trim();
+      const details = document.getElementById("preview-details").value.trim();
       const greeting = document.getElementById("preview-greeting").value.trim();
       const says = document.getElementById("preview-says").value.trim();
       const replies = document.getElementById("preview-replies").value.trim();
       const tone = document.getElementById("preview-tone").value.trim();
-      if (!greeting || !says || !replies || !tone) {
-        flash("Заполните все четыре блока превью", "error");
+      if (!goal) {
+        flash("Опишите цель звонка", "error");
         return;
       }
+      if (!details || details.length < 8) {
+        flash("Допишите сведения", "error");
+        return;
+      }
+      if (!greeting || !says || !replies || !tone) {
+        flash("Заполните все блоки превью", "error");
+        return;
+      }
+      camp.goal = goal;
+      camp.details = details;
+      camp.verdicts = ensureVerdicts(camp);
       camp.preview = { greeting, says, replies, tone };
       if (!camp.scenarioText) camp.scenarioText = says;
       persistCampaigns();
       const ok = document.getElementById("preview-ok");
       if (ok) ok.hidden = false;
       flash("Превью сохранено");
+      render();
     };
   }
 

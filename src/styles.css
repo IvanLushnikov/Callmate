@@ -599,15 +599,42 @@ form.panel > .btn,
   gap: var(--s3);
 }
 
+.preview-lead {
+  margin: 0 0 var(--s4);
+  color: var(--muted);
+}
+
+.preview-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+}
+
+.preview-slice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding-top: var(--s1);
+}
+
+.preview-slice + .preview-slice {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s4);
+}
+
+.preview-slice-kicker {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .preview-edit-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--s3) var(--s4);
-}
-
-.preview-lead {
-  margin: 0 0 var(--s3);
-  color: var(--muted);
+  gap: var(--s4);
 }
 
 .preview-field {
@@ -621,6 +648,10 @@ form.panel > .btn,
   min-width: 0;
 }
 
+.preview-field-full {
+  width: 100%;
+}
+
 .preview-field label {
   margin: 0;
   font-size: 0.8rem;
@@ -632,9 +663,22 @@ form.panel > .btn,
 
 .preview-field textarea {
   max-width: none;
-  min-height: 4.25rem;
+  width: 100%;
+  min-height: 5.5rem;
   background: var(--surface-2);
   border-color: var(--line);
+}
+
+.preview-field-full textarea {
+  min-height: 4.5rem;
+}
+
+#preview-details {
+  min-height: 8rem;
+}
+
+#preview-replies {
+  min-height: 7rem;
 }
 
 .preview-panel > .row-actions {
