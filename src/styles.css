@@ -399,4 +399,102 @@ table.data th {
   .sidebar { position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
   .preview-grid { grid-template-columns: 1fr; }
   .desktop-note { display: block; }
+  .page-topbar { flex-wrap: wrap; }
+  .flow-nav { top: 0; }
 }
+
+/* —— Single-page cabinet / admin —— */
+.page-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 1.25rem;
+  background: color-mix(in srgb, var(--surface-solid) 82%, transparent);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line);
+}
+
+.page-topbar .brand { margin: 0; font-size: 1.35rem; }
+
+.page-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.page-topbar .theme-switch { margin-top: 0; }
+
+.page-topbar .btn { margin-top: 0; }
+
+.flow-nav {
+  position: sticky;
+  top: 58px;
+  z-index: 15;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.55rem 1.25rem;
+  background: color-mix(in srgb, var(--bg1) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+
+.flow-nav a {
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  color: var(--muted);
+  border: 1px solid transparent;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.flow-nav a:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.page {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+  padding: 1.35rem 1.25rem 3rem;
+}
+
+.flow-section {
+  margin-bottom: 2rem;
+  scroll-margin-top: 120px;
+}
+
+.flow-section > h2 {
+  font-size: 1.45rem;
+  margin-bottom: 0.85rem;
+}
+
+.flow-section .panel.wide { max-width: none; }
+
+button.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font-weight: 650;
+  cursor: pointer;
+  text-align: left;
+}
+
+button.linkish:hover { text-decoration: underline; }
+
+.expand-row td { padding-top: 0.25rem; padding-bottom: 1rem; }
+
+.nested-form { margin: 0.75rem 0; }
+
+.contact-drawer h4 { margin: 0.85rem 0 0.35rem; }

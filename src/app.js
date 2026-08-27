@@ -47,6 +47,16 @@ const TIMEZONES = [
   "Asia/Vladivostok",
 ];
 
+const FLOW_NAV = [
+  { id: "sec-telephony", label: "Телефония" },
+  { id: "sec-campaign", label: "Кампания" },
+  { id: "sec-scenario", label: "Сценарий" },
+  { id: "sec-contacts", label: "Контакты" },
+  { id: "sec-launch", label: "Запуск" },
+  { id: "sec-statuses", label: "Статусы" },
+  { id: "sec-analytics", label: "Аналитика" },
+];
+
 function loadJson(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -95,7 +105,14 @@ const state = {
   }),
   companyBalance: Number(localStorage.getItem("cm_co_balance") || "500"),
   companyTariff: Number(localStorage.getItem("cm_co_tariff") || "5"),
+  activeCampaignId: localStorage.getItem("cm_active_campaign") || "",
   uiFlash: null,
+  ui: {
+    telephonyPanel: null,
+    showNewCampaign: false,
+    adminExpandedId: null,
+    statusExpandKey: null,
+  },
 };
 
 function persistCampaigns() {
@@ -108,6 +125,19 @@ function persistCompanies() {
 
 function persistTelephony() {
   saveJson("cm_telephony", state.telephony);
+}
+
+function persistActiveCampaign() {
+  if (state.activeCampaignId) {
+    localStorage.setItem("cm_active_campaign", state.activeCampaignId);
+  } else {
+    localStorage.removeItem("cm_active_campaign");
+  }
+}
+
+function setActiveCampaignId(id) {
+  state.activeCampaignId = id ? String(id) : "";
+  persistActiveCampaign();
 }
 
 function setTheme(theme) {
@@ -136,12 +166,58 @@ function matchPath(path, pattern) {
   return params;
 }
 
+/** Redirect legacy deep links; preserve campaign id when present. */
+function normalizeRoute(path) {
+  if (path.startsWith("/cabinet") && path !== "/cabinet") {
+    if (path === "/cabinet/campaigns/new") {
+      state.ui.showNewCampaign = true;
+      navigate("/cabinet");
+      return true;
+    }
+    const fromCamp =
+      matchPath(path, "/cabinet/campaigns/:id") ||
+      matchPath(path, "/cabinet/campaigns/:id/scenario") ||
+      matchPath(path, "/cabinet/campaigns/:id/contacts") ||
+      matchPath(path, "/cabinet/campaigns/:id/schedule") ||
+      matchPath(path, "/cabinet/campaigns/:id/launch");
+    const fromStatus = matchPath(path, "/cabinet/statuses/:campId/:phone");
+    const fromStatusCamp = matchPath(path, "/cabinet/statuses/:campId");
+    if (fromCamp?.id && fromCamp.id !== "new") setActiveCampaignId(fromCamp.id);
+    else if (fromStatus?.campId) {
+      setActiveCampaignId(fromStatus.campId);
+      state.ui.statusExpandKey = `${fromStatus.campId}|${fromStatus.phone}`;
+    } else if (fromStatusCamp?.campId) setActiveCampaignId(fromStatusCamp.campId);
+    navigate("/cabinet");
+    return true;
+  }
+  if (path.startsWith("/admin") && path !== "/admin") {
+    if (path !== "/admin/companies/new" && path !== "/admin/settings") {
+      const card = matchPath(path, "/admin/companies/:id");
+      const topup = matchPath(path, "/admin/companies/:id/topup");
+      if (card?.id && card.id !== "new") state.ui.adminExpandedId = card.id;
+      if (topup?.id) state.ui.adminExpandedId = topup.id;
+    }
+    navigate("/admin");
+    return true;
+  }
+  return false;
+}
+
 function campaignById(id) {
   return state.campaigns.find((c) => String(c.id) === String(id));
 }
 
 function companyById(id) {
   return state.companies.find((c) => String(c.id) === String(id));
+}
+
+function activeCampaign() {
+  if (!state.campaigns.length) return null;
+  const byId = campaignById(state.activeCampaignId);
+  if (byId) return byId;
+  const first = state.campaigns[0];
+  setActiveCampaignId(first.id);
+  return first;
 }
 
 function dialLabel(stateName) {
@@ -196,8 +272,6 @@ function roAttr() {
   return locked() ? "disabled" : "";
 }
 
-/* ---------- shells ---------- */
-
 function themeControls() {
   return `<div class="theme-switch">
     <button class="btn secondary" data-theme-set="light" type="button">Светлая</button>
@@ -222,126 +296,110 @@ function impersonateBanner() {
   </div>`;
 }
 
-function cabinetShell(path) {
-  const item = (href, label) =>
-    `<a href="#${href}" class="${path.startsWith(href) ? "active" : ""}">${label}</a>`;
-  return `<div class="app-shell">
-    <aside class="sidebar">
+function flowNavHtml() {
+  return `<nav class="flow-nav" aria-label="Разделы кабинета">
+    ${FLOW_NAV.map(
+      (item) =>
+        `<a href="#/cabinet" data-jump="${item.id}">${item.label}</a>`
+    ).join("")}
+  </nav>`;
+}
+
+function cabinetShell() {
+  return `<div class="page-shell">
+    <header class="page-topbar">
       <p class="brand">CallMate</p>
-      <nav class="nav">
-        ${item("/cabinet/campaigns", "Кампании")}
-        ${item("/cabinet/telephony", "Телефония")}
-        ${item("/cabinet/statuses", "Статусы")}
-        ${item("/cabinet/analytics", "Аналитика")}
-      </nav>
-      ${themeControls()}
-      <p class="hint desktop-note">Удобнее на компьютере. Телефонную вёрстку сделаем позже</p>
-    </aside>
-    <main class="main">
-      <div class="topbar">
-        <h1>${titleFor(path)}</h1>
+      <div class="page-topbar-actions">
+        ${themeControls()}
         <button class="btn secondary" id="logout" type="button">Выйти</button>
       </div>
+    </header>
+    ${flowNavHtml()}
+    <main class="page">
       ${impersonateBanner()}
       ${lockedBanner()}
       ${flashHtml()}
-      ${cabinetContent(path)}
+      ${cabinetPage()}
     </main>
   </div>`;
 }
 
-function adminShell(path) {
-  return `<div class="app-shell">
-    <aside class="sidebar">
+function adminShell() {
+  return `<div class="page-shell">
+    <header class="page-topbar">
       <p class="brand">CallMate · Админка</p>
-      <nav class="nav">
-        <a href="#/admin/companies" class="${path.startsWith("/admin/companies") ? "active" : ""}">Компании</a>
-        <a href="#/admin/settings" class="${path.startsWith("/admin/settings") ? "active" : ""}">Настройки продукта</a>
-      </nav>
-      ${themeControls()}
-    </aside>
-    <main class="main">
-      <div class="topbar">
-        <h1>${adminTitle(path)}</h1>
+      <div class="page-topbar-actions">
+        ${themeControls()}
         <button class="btn secondary" id="logout" type="button">Выйти</button>
       </div>
+    </header>
+    <main class="page">
       ${flashHtml()}
-      ${adminContent(path)}
+      ${adminPage()}
     </main>
   </div>`;
 }
 
-function adminTitle(path) {
-  if (path.startsWith("/admin/settings")) return "Настройки продукта";
-  if (matchPath(path, "/admin/companies/:id/topup")) return "Пополнить баланс";
-  if (matchPath(path, "/admin/companies/:id")) return "Компания";
-  if (path === "/admin/companies/new") return "Создать компанию";
-  return "Компании";
-}
+/* ---------- admin (one page) ---------- */
 
-function titleFor(path) {
-  if (path.includes("telephony")) return "Телефония";
-  if (path.includes("statuses")) return "Статусы";
-  if (path.includes("analytics")) return "Аналитика";
-  if (path.includes("_checklist")) return "Чеклист выпуска";
-  return "Кампании";
-}
-
-/* ---------- admin ---------- */
-
-function adminContent(path) {
-  if (path === "/admin/companies/new") return adminNewCompany();
-  if (path.startsWith("/admin/settings")) return adminSettings();
-  const topup = matchPath(path, "/admin/companies/:id/topup");
-  if (topup) return adminTopUp(topup.id);
-  const card = matchPath(path, "/admin/companies/:id");
-  if (card) return adminCompanyCard(card.id);
-  return adminCompanyList();
+function adminPage() {
+  return `${adminNewCompany()}
+  ${adminCompanyList()}
+  <section class="flow-section" id="sec-admin-settings">
+    <h2>Настройки продукта</h2>
+    ${adminSettings()}
+  </section>`;
 }
 
 function adminCompanyList() {
   if (!state.companies.length) {
-    return `<div class="panel">
-      <p>Пока нет компаний</p>
-      <a class="btn" href="#/admin/companies/new" style="display:inline-block">Создать компанию</a>
-    </div>`;
+    return `<section class="flow-section">
+      <h2>Компании</h2>
+      <div class="panel wide"><p>Пока нет компаний</p></div>
+    </section>`;
   }
   const rows = state.companies
     .map((c) => {
       const access = c.access_status === "locked" ? "Заблокирована" : "Активна";
       const tariff = c.price_per_minute != null ? c.price_per_minute : "—";
+      const expanded = String(state.ui.adminExpandedId) === String(c.id);
       return `<tr>
-        <td><a href="#/admin/companies/${encodeURIComponent(c.id)}">${escapeHtml(c.name)}</a></td>
+        <td>
+          <button type="button" class="linkish" data-expand-company="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>
+        </td>
         <td>${access}</td>
         <td>${escapeHtml(c.created_at || "")}</td>
         <td>Тариф за минуту: ${escapeHtml(String(tariff))}</td>
-      </tr>`;
+      </tr>
+      ${expanded ? `<tr class="expand-row"><td colspan="4">${adminCompanyCardInline(c)}</td></tr>` : ""}`;
     })
     .join("");
-  return `<div class="panel wide">
-    <a class="btn" href="#/admin/companies/new" style="display:inline-block">Создать компанию</a>
-    <table class="data">
-      <thead><tr><th>Компания</th><th>Доступ</th><th>Создана</th><th>Тариф</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  </div>`;
+  return `<section class="flow-section">
+    <h2>Компании</h2>
+    <div class="panel wide">
+      <table class="data">
+        <thead><tr><th>Компания</th><th>Доступ</th><th>Создана</th><th>Тариф</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </section>`;
 }
 
 function adminNewCompany() {
-  return `<form class="panel" id="new-company-form">
+  return `<section class="flow-section">
     <h2>Создать компанию</h2>
-    <label>Название компании</label><input id="co-name" />
-    <label>Логин</label><input id="co-login" placeholder="Ваш логин" />
-    <label>Пароль</label><input id="co-password" type="password" placeholder="Пароль" />
-    <div class="error" id="co-error" hidden></div>
-    <p class="hint ok-line" id="co-ok" hidden>Компания создана</p>
-    <button class="btn" type="submit">Создать</button>
-  </form>`;
+    <form class="panel" id="new-company-form">
+      <label>Название компании</label><input id="co-name" />
+      <label>Логин</label><input id="co-login" placeholder="Ваш логин" />
+      <label>Пароль</label><input id="co-password" type="password" placeholder="Пароль" />
+      <div class="error" id="co-error" hidden></div>
+      <p class="hint ok-line" id="co-ok" hidden>Компания создана</p>
+      <button class="btn" type="submit">Создать</button>
+    </form>
+  </section>`;
 }
 
-function adminCompanyCard(id) {
-  const c = companyById(id);
-  if (!c) return `<div class="panel"><p>Компанию не нашли</p><a href="#/admin/companies">К компаниям</a></div>`;
+function adminCompanyCardInline(c) {
   const lockedCo = c.access_status === "locked";
   const mins =
     c.price_per_minute > 0 ? Math.floor((c.balance || 0) / c.price_per_minute) : 0;
@@ -350,20 +408,26 @@ function adminCompanyCard(id) {
     .reverse()
     .map((h) => `<li>${escapeHtml(h)}</li>`)
     .join("") || "<li class='hint'>Пока пусто</li>";
-  return `<div class="panel wide">
-    <h2>Компания</h2>
+  return `<div class="panel nested" data-company-card="${escapeHtml(c.id)}">
     <p><strong>${escapeHtml(c.name)}</strong> · ${escapeHtml(c.login || "")}</p>
     <p>Статус: ${lockedCo ? "Заблокирована" : "Активна"}</p>
     <p>Баланс: ${escapeHtml(String(c.balance || 0))} ₽
       <span class="hint">≈ ${mins} мин по тарифу</span></p>
     <p>Тариф за минуту: ${escapeHtml(String(c.price_per_minute ?? "—"))}</p>
+    <form id="topup-form" data-id="${escapeHtml(c.id)}" class="nested-form">
+      <label>Пополнить, ₽</label>
+      <input id="topup-amount" type="number" min="0" step="1" />
+      <div class="error" id="topup-error" hidden></div>
+      <p class="hint ok-line" id="topup-ok" hidden>Баланс пополнен</p>
+      <button class="btn" type="submit">Пополнить</button>
+    </form>
     <div class="row-actions">
-      <a class="btn" href="#/admin/companies/${encodeURIComponent(c.id)}/topup">Пополнить</a>
       <button class="btn secondary" type="button" id="change-tariff" data-id="${escapeHtml(c.id)}">Сменить тариф</button>
       <button class="btn secondary" type="button" id="open-cabinet" data-id="${escapeHtml(c.id)}">Открыть кабинет</button>
       <button class="btn secondary" type="button" id="toggle-lock" data-id="${escapeHtml(c.id)}">
         ${lockedCo ? "Разблокировать" : "Заблокировать"}
       </button>
+      <button class="btn secondary" type="button" data-collapse-company>Свернуть</button>
     </div>
     <div id="lock-dialog" class="panel nested" hidden>
       <p>Заблокировать компанию? Клиент сможет только смотреть. Обзвон остановится</p>
@@ -372,25 +436,7 @@ function adminCompanyCard(id) {
     </div>
     <h3>История</h3>
     <ul>${hist}</ul>
-    <a class="hint" href="#/admin/companies">← К компаниям</a>
   </div>`;
-}
-
-function adminTopUp(id) {
-  const c = companyById(id);
-  if (!c) return `<div class="panel"><p>Компанию не нашли</p></div>`;
-  const mins =
-    c.price_per_minute > 0 ? Math.floor((c.balance || 0) / c.price_per_minute) : 0;
-  return `<form class="panel" id="topup-form" data-id="${escapeHtml(c.id)}">
-    <h2>Пополнить баланс</h2>
-    <p class="hint">Сейчас: ${escapeHtml(String(c.balance || 0))} ₽ · ≈ ${mins} мин по текущему тарифу</p>
-    <label>Сумма, ₽</label>
-    <input id="topup-amount" type="number" min="0" step="1" />
-    <div class="error" id="topup-error" hidden></div>
-    <p class="hint ok-line" id="topup-ok" hidden>Баланс пополнен</p>
-    <button class="btn" type="submit">Пополнить</button>
-    <a class="btn secondary" href="#/admin/companies/${encodeURIComponent(c.id)}" style="display:inline-block;margin-left:.5rem">Назад</a>
-  </form>`;
 }
 
 function adminSettings() {
@@ -398,7 +444,7 @@ function adminSettings() {
   const tariff = localStorage.getItem("cm_default_tariff") || "0";
   return `<div>
     <form class="panel" id="interval-form">
-      <h2>Интервал подачи пачек</h2>
+      <h3>Интервал подачи пачек</h3>
       <label>Интервал подачи пачек (секунды)</label>
       <input id="interval-sec" type="number" min="1" value="${escapeHtml(interval)}" />
       <p class="hint">Клиенты компаний это значение не видят и не меняют</p>
@@ -408,7 +454,7 @@ function adminSettings() {
       <button class="btn" type="submit">Сохранить</button>
     </form>
     <form class="panel" id="default-tariff-form" style="margin-top:1rem">
-      <h2>Тариф по умолчанию</h2>
+      <h3>Тариф по умолчанию</h3>
       <label>Цена минуты для новых компаний</label>
       <input id="default-tariff" type="number" min="0" step="0.01" value="${escapeHtml(tariff)}" />
       <p class="hint">Подставится при создании компании. Потом можно сменить в карточке</p>
@@ -419,93 +465,7 @@ function adminSettings() {
   </div>`;
 }
 
-/* ---------- cabinet: telephony ---------- */
-
-function telephonyOverview() {
-  const t = state.telephony;
-  const linesVal = t.lines != null ? t.lines : "";
-  if (t.checking) {
-    return `<div class="panel wide">
-      <p><strong>Проверяем подключение…</strong></p>
-      <p class="hint">Это не обзвон — только проверка связи</p>
-    </div>`;
-  }
-  if (t.status === "ok") {
-    return `<div class="panel wide">
-      <p><strong>Телефония подключена</strong></p>
-      <p class="hint">Можно создавать кампанию и запускать обзвон</p>
-      ${linesField(linesVal)}
-      <div class="row-actions">
-        <a class="btn" href="#/cabinet/campaigns">К кампаниям</a>
-        <a class="btn secondary" href="#/cabinet/telephony/sip">Изменить данные</a>
-      </div>
-    </div>`;
-  }
-  if (t.status === "error") {
-    const msg = ERROR_BY_CODE[t.lastError] || ERROR_BY_CODE.sip_unknown;
-    return `<div class="panel wide">
-      <h2>Не удалось подключить телефонию</h2>
-      <p class="error">${escapeHtml(msg)}</p>
-      <div class="row-actions">
-        <button class="btn" type="button" id="sip-recheck" ${roAttr()}>Проверить снова</button>
-        <a class="btn secondary" href="#/cabinet/telephony/sip">Изменить данные</a>
-      </div>
-      ${linesField(linesVal)}
-    </div>`;
-  }
-  return `<div class="panel wide">
-    <p>Подключите телефонию, чтобы звонить</p>
-    <div class="row-actions">
-      <a class="btn" href="#/cabinet/telephony/sip" style="display:inline-block">Подключить SIP</a>
-      <a class="btn secondary" href="#/cabinet/telephony/mango" style="display:inline-block ${locked() ? ";pointer-events:none;opacity:.5" : ""}">Подключить через Манго</a>
-    </div>
-    ${linesField(linesVal)}
-  </div>`;
-}
-
-function linesField(value, { standalone = true } = {}) {
-  const body = `
-    <label>Число линий</label>
-    <input id="lines-input" type="number" min="1" placeholder="Например: 5" value="${escapeHtml(String(value))}" ${roAttr()} />
-    <p class="hint">Сколько одновременных звонков позволяет ваша телефония</p>
-    <div class="error" id="lines-error" hidden></div>
-    ${standalone ? `<button class="btn secondary" type="submit" ${roAttr()}>Сохранить</button>` : ""}`;
-  if (!standalone) return `<div class="lines-block">${body}</div>`;
-  return `<form id="lines-form" class="lines-block">${body}</form>`;
-}
-
-function sipForm() {
-  return `<form class="panel" id="sip-form">
-    <h2>SIP</h2>
-    <label>Адрес</label><input id="sip-host" placeholder="sip.example.com" ${roAttr()} />
-    <label>Логин</label><input id="sip-login" placeholder="Ваш логин" ${roAttr()} />
-    <label>Пароль</label><input id="sip-password" type="password" placeholder="Пароль" ${roAttr()} />
-    <p class="hint">Пароль сохраним, но снова не покажем</p>
-    ${linesField(state.telephony.lines != null ? state.telephony.lines : "", { standalone: false })}
-    <div class="error" id="sip-error" hidden></div>
-    <div class="row-actions">
-      <button class="btn" type="submit" ${roAttr()}>Сохранить</button>
-      <button class="btn secondary" type="button" id="sip-check" ${roAttr()}>Проверить подключение</button>
-    </div>
-    <a class="hint" href="#/cabinet/telephony">← К обзору телефонии</a>
-  </form>`;
-}
-
-function mangoForm() {
-  return `<form class="panel" id="mango-form">
-    <h2>Манго Телеком</h2>
-    <label>Логин</label><input id="mango-login" placeholder="Ваш логин" ${roAttr()} />
-    <label>Пароль</label><input id="mango-password" type="password" placeholder="Пароль" ${roAttr()} />
-    <p class="hint">Пароль сохраним, но снова не покажем</p>
-    ${linesField(state.telephony.lines != null ? state.telephony.lines : "", { standalone: false })}
-    <div class="error" id="mango-error" hidden></div>
-    <p class="hint ok-line" id="mango-ok" hidden>Телефония подключена</p>
-    <button class="btn" type="submit" ${roAttr()}>Подключить</button>
-    <a class="btn secondary" href="#/cabinet/telephony" style="display:inline-block;margin-left:.5rem">К обзору телефонии</a>
-  </form>`;
-}
-
-/* ---------- cabinet: campaigns ---------- */
+/* ---------- cabinet sections ---------- */
 
 function emptyCampaign(partial = {}) {
   return {
@@ -544,37 +504,107 @@ function ensureVerdicts(camp) {
   return ["Дошли до цели", "Не дошли", "Перезвонить позже"];
 }
 
-function campaignList() {
-  if (!state.campaigns.length) {
-    const create =
-      locked()
-        ? `<button class="btn" type="button" disabled>Создать кампанию</button>
-           <p class="hint">Аккаунт заблокирован</p>`
-        : `<a class="btn" href="#/cabinet/campaigns/new" style="display:inline-block">Создать кампанию</a>`;
-    return `<div class="panel"><p>Создайте первую кампанию</p>${create}</div>`;
-  }
-  const rows = state.campaigns
-    .map(
-      (c) =>
-        `<tr><td>${escapeHtml(c.name || "Без названия")}</td><td>${dialLabel(c.dial_state)}</td>
-        <td><a href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">Открыть</a></td></tr>`
-    )
-    .join("");
-  const createBtn = locked()
-    ? `<button class="btn" type="button" disabled>Создать кампанию</button>`
-    : `<a class="btn" href="#/cabinet/campaigns/new" style="display:inline-block">Создать кампанию</a>`;
-  return `<div class="panel wide">
-    ${createBtn}
-    <table class="data">
-      <thead><tr><th>Кампании</th><th>Состояние</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  </div>`;
+function cabinetPage() {
+  const camp = activeCampaign();
+  return `
+    ${sectionTelephony()}
+    ${sectionCampaign(camp)}
+    ${sectionScenario(camp)}
+    ${sectionContacts(camp)}
+    ${sectionSchedule(camp)}
+    ${sectionLaunch(camp)}
+    ${sectionStatuses(camp)}
+    ${sectionAnalytics(camp)}
+  `;
 }
 
-function newCampaignForm() {
-  return `<form class="panel" id="new-campaign-form">
-    <h2>Новая кампания</h2>
+function linesField(value, { standalone = true } = {}) {
+  const body = `
+    <label>Число линий</label>
+    <input id="lines-input" type="number" min="1" placeholder="Например: 5" value="${escapeHtml(String(value))}" ${roAttr()} />
+    <p class="hint">Сколько одновременных звонков позволяет ваша телефония</p>
+    <div class="error" id="lines-error" hidden></div>
+    ${standalone ? `<button class="btn secondary" type="submit" ${roAttr()}>Сохранить</button>` : ""}`;
+  if (!standalone) return `<div class="lines-block">${body}</div>`;
+  return `<form id="lines-form" class="lines-block">${body}</form>`;
+}
+
+function sipFormInline() {
+  return `<form class="panel nested" id="sip-form">
+    <h3>SIP</h3>
+    <label>Адрес</label><input id="sip-host" placeholder="sip.example.com" ${roAttr()} />
+    <label>Логин</label><input id="sip-login" placeholder="Ваш логин" ${roAttr()} />
+    <label>Пароль</label><input id="sip-password" type="password" placeholder="Пароль" ${roAttr()} />
+    <p class="hint">Пароль сохраним, но снова не покажем</p>
+    ${linesField(state.telephony.lines != null ? state.telephony.lines : "", { standalone: false })}
+    <div class="error" id="sip-error" hidden></div>
+    <div class="row-actions">
+      <button class="btn" type="submit" ${roAttr()}>Сохранить</button>
+      <button class="btn secondary" type="button" id="sip-check" ${roAttr()}>Проверить подключение</button>
+      <button class="btn secondary" type="button" data-close-tel-panel>Свернуть</button>
+    </div>
+  </form>`;
+}
+
+function mangoFormInline() {
+  return `<form class="panel nested" id="mango-form">
+    <h3>Манго Телеком</h3>
+    <label>Логин</label><input id="mango-login" placeholder="Ваш логин" ${roAttr()} />
+    <label>Пароль</label><input id="mango-password" type="password" placeholder="Пароль" ${roAttr()} />
+    <p class="hint">Пароль сохраним, но снова не покажем</p>
+    ${linesField(state.telephony.lines != null ? state.telephony.lines : "", { standalone: false })}
+    <div class="error" id="mango-error" hidden></div>
+    <p class="hint ok-line" id="mango-ok" hidden>Телефония подключена</p>
+    <div class="row-actions">
+      <button class="btn" type="submit" ${roAttr()}>Подключить</button>
+      <button class="btn secondary" type="button" data-close-tel-panel>Свернуть</button>
+    </div>
+  </form>`;
+}
+
+function sectionTelephony() {
+  const t = state.telephony;
+  const linesVal = t.lines != null ? t.lines : "";
+  const panel = state.ui.telephonyPanel;
+  let body = "";
+  if (t.checking) {
+    body = `<p><strong>Проверяем подключение…</strong></p>
+      <p class="hint">Это не обзвон — только проверка связи</p>`;
+  } else if (t.status === "ok") {
+    body = `<p><strong>Телефония подключена</strong></p>
+      <p class="hint">Можно создавать кампанию и запускать обзвон</p>
+      ${linesField(linesVal)}
+      <div class="row-actions">
+        <button class="btn secondary" type="button" data-open-tel="sip" ${roAttr()}>Изменить данные</button>
+      </div>`;
+  } else if (t.status === "error") {
+    const msg = ERROR_BY_CODE[t.lastError] || ERROR_BY_CODE.sip_unknown;
+    body = `<h3>Не удалось подключить телефонию</h3>
+      <p class="error">${escapeHtml(msg)}</p>
+      <div class="row-actions">
+        <button class="btn" type="button" id="sip-recheck" ${roAttr()}>Проверить снова</button>
+        <button class="btn secondary" type="button" data-open-tel="sip" ${roAttr()}>Изменить данные</button>
+      </div>
+      ${linesField(linesVal)}`;
+  } else {
+    body = `<p>Подключите телефонию, чтобы звонить</p>
+      <div class="row-actions">
+        <button class="btn" type="button" data-open-tel="sip" ${roAttr()}>Подключить SIP</button>
+        <button class="btn secondary" type="button" data-open-tel="mango" ${roAttr()}>Подключить через Манго</button>
+      </div>
+      ${linesField(linesVal)}`;
+  }
+  const expand =
+    panel === "sip" ? sipFormInline() : panel === "mango" ? mangoFormInline() : "";
+  return `<section class="flow-section" id="sec-telephony">
+    <h2>Телефония</h2>
+    <div class="panel wide">${body}${expand}</div>
+  </section>`;
+}
+
+function newCampaignFormInline() {
+  return `<form class="panel nested" id="new-campaign-form">
+    <h3>Новая кампания</h3>
     <label>Название</label><input id="camp-name" ${roAttr()} />
     <p class="hint">Пустое имя — не мешает запуску</p>
     <label>Цель звонка</label>
@@ -584,127 +614,181 @@ function newCampaignForm() {
     <textarea id="camp-details" rows="4" placeholder="Что важно сказать абоненту" ${roAttr()}></textarea>
     <p class="hint">Что роботу знать о продукте и ситуации</p>
     <div class="error" id="camp-error" hidden></div>
-    <button class="btn" type="submit" ${roAttr()}>Сохранить</button>
+    <div class="row-actions">
+      <button class="btn" type="submit" ${roAttr()}>Сохранить</button>
+      <button class="btn secondary" type="button" id="cancel-new-campaign">Отмена</button>
+    </div>
   </form>`;
 }
 
-function campaignTabs(id, active) {
-  const tabs = [
-    ["", "Обзор"],
-    ["/scenario", "Сценарий"],
-    ["/contacts", "Контакты"],
-    ["/schedule", "Расписание"],
-    ["/launch", "Запуск"],
-  ];
-  return `<nav class="subnav">${tabs
-    .map(([suffix, label]) => {
-      const href = `#/cabinet/campaigns/${encodeURIComponent(id)}${suffix}`;
-      const isActive =
-        (suffix === "" && active === "overview") ||
-        (suffix && active === suffix.slice(1));
-      return `<a href="${href}" class="${isActive ? "active" : ""}">${label}</a>`;
-    })
-    .join("")}</nav>`;
-}
+function sectionCampaign(camp) {
+  if (!state.campaigns.length || state.ui.showNewCampaign) {
+    const create = locked()
+      ? `<button class="btn" type="button" disabled>Создать кампанию</button>
+         <p class="hint">Аккаунт заблокирован</p>`
+      : state.ui.showNewCampaign || !state.campaigns.length
+        ? newCampaignFormInline()
+        : "";
+    const emptyHint = !state.campaigns.length
+      ? `<p>Создайте первую кампанию</p>`
+      : "";
+    const showCreateBtn =
+      state.campaigns.length && !state.ui.showNewCampaign && !locked()
+        ? `<button class="btn" type="button" id="show-new-campaign">Создать кампанию</button>`
+        : "";
+    if (!state.campaigns.length) {
+      return `<section class="flow-section" id="sec-campaign">
+        <h2>Кампания</h2>
+        <div class="panel wide">${emptyHint}${create}</div>
+      </section>`;
+    }
+  }
 
-function campaignOverview(camp) {
-  const started = isStarted(camp);
-  const preview = buildPreview(camp);
-  const weak = isWeakScenario(camp);
-  const verdicts = ensureVerdicts(camp);
-  return `${campaignTabs(camp.id, "overview")}
-  <div class="panel wide">
-    <h2>${escapeHtml(camp.name || "Без названия")}</h2>
-    <p>Состояние: ${dialLabel(camp.dial_state)}</p>
-    <p>Цель: ${escapeHtml(camp.goal || "—")}</p>
-    ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
-    ${weak && !started ? `<div class="banner banner-warn">
-      <strong>Сценарий пока слишком слабый для обзвона</strong>
-      <p class="hint">Допишите цель и сведения или поправьте текст</p>
-    </div>` : ""}
-    <section class="preview-blocks">
-      <h3>Робот так понял сценарий</h3>
-      ${
-        !camp.goal
-          ? `<p class="hint">Сначала сохраните цель и сведения</p>`
-          : `<div class="preview-grid">
-        <div><h4>Приветствие</h4><p>${escapeHtml(preview.greeting)}</p>
-          <p class="hint">Нет имени — в приветствии обойдёмся без обращения</p>
-          <p class="hint">Если имени нет — робот его не говорит</p>
-          <p class="hint">Пример: Здравствуйте!</p></div>
-        <div><h4>Что говорит</h4><p>${escapeHtml(preview.says)}</p></div>
-        <div><h4>Как отвечает</h4><p>${escapeHtml(preview.replies)}</p></div>
-        <div><h4>Тон</h4><p>${escapeHtml(preview.tone)}</p>
-          <p class="hint">Спокойно и по делу, без давления оформить любой ценой</p></div>
+  const options = state.campaigns
+    .map(
+      (c) =>
+        `<option value="${escapeHtml(c.id)}" ${String(c.id) === String(camp?.id) ? "selected" : ""}>${escapeHtml(c.name || "Без названия")} · ${dialLabel(c.dial_state)}</option>`
+    )
+    .join("");
+
+  const started = camp && isStarted(camp);
+  const weak = camp && isWeakScenario(camp);
+  const verdicts = camp ? ensureVerdicts(camp) : [];
+
+  return `<section class="flow-section" id="sec-campaign">
+    <h2>Кампания</h2>
+    <div class="panel wide">
+      <label>Активная кампания</label>
+      <select id="active-campaign-select">${options}</select>
+      <div class="row-actions">
+        ${
+          locked()
+            ? `<button class="btn" type="button" disabled>Создать кампанию</button>`
+            : `<button class="btn secondary" type="button" id="show-new-campaign">Создать кампанию</button>`
+        }
       </div>
-      ${!started ? `<a class="btn secondary" href="#/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario">Править сценарий</a>` : ""}`
-      }
-    </section>
-    <section style="margin-top:1.25rem">
-      <h3>Возможные итоги разговора</h3>
-      <p class="hint">Система собрала список по цели. Менять его нельзя</p>
+      ${state.ui.showNewCampaign && !locked() ? newCampaignFormInline() : ""}
       ${
-        verdicts.length
-          ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(v)}</li>`).join("")}</ul>`
-          : `<p class="hint">Пока нет итогов — уточните цель и соберите сценарий снова</p>`
+        camp
+          ? `<h3 style="margin-top:1rem">${escapeHtml(camp.name || "Без названия")}</h3>
+        <p>Состояние: ${dialLabel(camp.dial_state)}</p>
+        <p>Цель: ${escapeHtml(camp.goal || "—")}</p>
+        ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
+        ${
+          weak && !started
+            ? `<div class="banner banner-warn">
+          <strong>Сценарий пока слишком слабый для обзвона</strong>
+          <p class="hint">Допишите цель и сведения или поправьте текст</p>
+        </div>`
+            : ""
+        }
+        <section class="preview-blocks" style="margin-top:1rem">
+          <h3>Робот так понял сценарий</h3>
+          ${
+            !camp.goal
+              ? `<p class="hint">Сначала сохраните цель и сведения</p>`
+              : (() => {
+                  const preview = buildPreview(camp);
+                  return `<div class="preview-grid">
+            <div><h4>Приветствие</h4><p>${escapeHtml(preview.greeting)}</p>
+              <p class="hint">Нет имени — в приветствии обойдёмся без обращения</p>
+              <p class="hint">Если имени нет — робот его не говорит</p>
+              <p class="hint">Пример: Здравствуйте!</p></div>
+            <div><h4>Что говорит</h4><p>${escapeHtml(preview.says)}</p></div>
+            <div><h4>Как отвечает</h4><p>${escapeHtml(preview.replies)}</p></div>
+            <div><h4>Тон</h4><p>${escapeHtml(preview.tone)}</p>
+              <p class="hint">Спокойно и по делу, без давления оформить любой ценой</p></div>
+          </div>`;
+                })()
+          }
+        </section>
+        <section style="margin-top:1.25rem">
+          <h3>Возможные итоги разговора</h3>
+          <p class="hint">Система собрала список по цели. Менять его нельзя</p>
+          ${
+            verdicts.length
+              ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(v)}</li>`).join("")}</ul>`
+              : `<p class="hint">Пока нет итогов — уточните цель и соберите сценарий снова</p>`
+          }
+        </section>`
+          : ""
       }
-    </section>
-  </div>`;
+    </div>
+  </section>`;
 }
 
-function campaignScenario(camp) {
+function needCampPanel(title, id) {
+  return `<section class="flow-section" id="${id}">
+    <h2>${title}</h2>
+    <div class="panel wide"><p class="hint">Сначала создайте кампанию выше</p></div>
+  </section>`;
+}
+
+function sectionScenario(camp) {
+  if (!camp) return needCampPanel("Сценарий", "sec-scenario");
   const started = isStarted(camp);
   const dis = started || locked() ? "disabled" : "";
   const stages =
-    (camp.stages && camp.stages.length
+    camp.stages && camp.stages.length
       ? camp.stages
       : camp.goal
         ? [{ goal: camp.goal, input: "Приветствие", output: "Переход к сути" }]
-        : []);
+        : [];
   const attrs = camp.columns || [];
-  return `${campaignTabs(camp.id, "scenario")}
-  <div class="panel wide">
-    ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
+  return `<section class="flow-section" id="sec-scenario">
     <h2>Сценарий</h2>
-    <p class="hint">Можно править текст; ветки диалога рисовать не нужно</p>
-    <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
-    <label>Текст сценария</label>
-    <textarea id="scenario-text" rows="6" ${dis}>${escapeHtml(camp.scenarioText || camp.details || "")}</textarea>
-    <div class="row-actions">
-      <button class="btn secondary" type="button" id="insert-attr" ${dis}>Вставить поле</button>
-      <button class="btn" type="button" id="save-scenario" ${dis}>Сохранить черновик</button>
-    </div>
-    <p class="hint ok-line" id="scenario-ok" hidden>Черновик сохранён</p>
-    <div id="attr-picker" class="panel nested" hidden>
-      <h4>Поля из файла</h4>
-      <p class="hint">Имя поля = название столбца в файле</p>
+    <div class="panel wide">
+      ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
+      <p class="hint">Можно править текст; ветки диалога рисовать не нужно</p>
+      <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
+      <label>Текст сценария</label>
+      <textarea id="scenario-text" rows="6" ${dis}>${escapeHtml(camp.scenarioText || camp.details || "")}</textarea>
+      <div class="row-actions">
+        <button class="btn secondary" type="button" id="insert-attr" ${dis}>Вставить поле</button>
+        <button class="btn" type="button" id="save-scenario" ${dis}>Сохранить черновик</button>
+      </div>
+      <p class="hint ok-line" id="scenario-ok" hidden>Черновик сохранён</p>
+      <div id="attr-picker" class="panel nested" hidden>
+        <h4>Поля из файла</h4>
+        <p class="hint">Имя поля = название столбца в файле</p>
+        ${
+          attrs.length
+            ? attrs
+                .map(
+                  (a) =>
+                    `<button type="button" class="btn secondary attr-pick" data-attr="${escapeHtml(a)}">{${escapeHtml(a)}}</button>`
+                )
+                .join(" ")
+            : `<p class="hint">Сначала загрузите контакты или добавьте поле</p>`
+        }
+      </div>
+      <h3>Этапы разговора</h3>
       ${
-        attrs.length
-          ? attrs.map((a) => `<button type="button" class="btn secondary attr-pick" data-attr="${escapeHtml(a)}">{${escapeHtml(a)}}</button>`).join(" ")
-          : `<p class="hint">Сначала загрузите контакты или добавьте поле</p>`
+        stages.length
+          ? stages
+              .map(
+                (s, i) => `<form class="panel nested stage-form" data-idx="${i}">
+            <label>Цель этапа</label><input name="goal" value="${escapeHtml(s.goal || "")}" ${dis} />
+            <label>Что на входе</label><input name="input" value="${escapeHtml(s.input || "")}" ${dis} />
+            <label>Что на выходе</label><input name="output" value="${escapeHtml(s.output || "")}" ${dis} />
+            <button class="btn secondary" type="submit" ${dis}>Сохранить этап</button>
+          </form>`
+              )
+              .join("")
+          : `<p class="hint">Этапы появятся после сборки сценария</p>`
+      }
+      ${
+        started
+          ? `<p class="hint">После старта менять нельзя</p>
+        <button class="btn" type="button" id="show-new-campaign-from-scenario">Создать кампанию</button>`
+          : ""
       }
     </div>
-    <h3>Этапы разговора</h3>
-    ${
-      stages.length
-        ? stages
-            .map(
-              (s, i) => `<form class="panel nested stage-form" data-idx="${i}">
-          <label>Цель этапа</label><input name="goal" value="${escapeHtml(s.goal || "")}" ${dis} />
-          <label>Что на входе</label><input name="input" value="${escapeHtml(s.input || "")}" ${dis} />
-          <label>Что на выходе</label><input name="output" value="${escapeHtml(s.output || "")}" ${dis} />
-          <button class="btn secondary" type="submit" ${dis}>Сохранить этап</button>
-        </form>`
-            )
-            .join("")
-        : `<p class="hint">Этапы появятся после сборки сценария</p>`
-    }
-    ${started ? `<p class="hint">После старта менять нельзя</p>
-      <a class="btn" href="#/cabinet/campaigns/new">Создать кампанию</a>` : ""}
-  </div>`;
+  </section>`;
 }
 
-function campaignContacts(camp) {
+function sectionContacts(camp) {
+  if (!camp) return needCampPanel("Контакты", "sec-contacts");
   const started = isStarted(camp);
   const contacts = camp.contacts || [];
   const warnings = camp.uploadWarnings || [];
@@ -725,7 +809,7 @@ function campaignContacts(camp) {
             .map(
               (r) => `<tr>
               <td><input type="checkbox" class="contact-check" data-phone="${escapeHtml(r.phone)}" ${roAttr()} /></td>
-              <td><a href="#/cabinet/statuses/${encodeURIComponent(camp.id)}/${encodeURIComponent(r.phone)}">${escapeHtml(maskPhone(r.phone))}</a></td>
+              <td><button type="button" class="linkish" data-jump="sec-statuses" data-expand-status="${escapeHtml(camp.id)}|${escapeHtml(r.phone)}">${escapeHtml(maskPhone(r.phone))}</button></td>
               <td>${escapeHtml(statusLabel(r.status))}</td>
               <td>${escapeHtml(r.name || "")}</td>
             </tr>`
@@ -733,33 +817,45 @@ function campaignContacts(camp) {
             .join("")}</tbody>
         </table>`;
 
-  return `${campaignTabs(camp.id, "contacts")}
-  <div class="panel wide">
-    ${reloadHint}
-    <div class="upload-zone" id="upload-zone">
-      <p>Перетащите файл или выберите на компьютере</p>
-      <p class="hint">Excel или CSV</p>
-      <button class="btn" type="button" id="pick-file" ${roAttr()}>Выбрать файл</button>
-      <input type="file" id="contact-file" accept=".csv,.xlsx,.xls" hidden ${roAttr()} />
-      <p class="hint consent">Загружая номера, вы подтверждаете, что у вас есть законные основания звонить этим людям. CallMate согласия за вас не собирает</p>
-      <p class="hint">Храните согласия и документы у себя</p>
+  return `<section class="flow-section" id="sec-contacts">
+    <h2>Контакты</h2>
+    <div class="panel wide">
+      ${reloadHint}
+      <div class="upload-zone" id="upload-zone">
+        <p>Перетащите файл или выберите на компьютере</p>
+        <p class="hint">Excel или CSV</p>
+        <button class="btn" type="button" id="pick-file" ${roAttr()}>Выбрать файл</button>
+        <input type="file" id="contact-file" accept=".csv,.xlsx,.xls" hidden ${roAttr()} />
+        <p class="hint consent">Загружая номера, вы подтверждаете, что у вас есть законные основания звонить этим людям. CallMate согласия за вас не собирает</p>
+        <p class="hint">Храните согласия и документы у себя</p>
+      </div>
+      <p id="upload-progress" class="hint" hidden>Загружаем контакты…</p>
+      <p class="hint" id="upload-progress-hint" hidden>Большой файл может занять несколько минут</p>
+      <p class="hint ok-line" id="upload-ok" hidden>Контакты загружены</p>
+      <div id="upload-errors"></div>
+      ${warnings.map((w) => `<p class="error">${escapeHtml(w)}</p>`).join("")}
+      <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
+      <div id="reload-precheck" class="panel nested" hidden></div>
+      <div id="new-col-alert" class="panel nested" hidden></div>
+      <h3 style="margin-top:1rem">Список</h3>
+      ${table}
+      ${
+        started
+          ? `<button class="btn secondary" type="button" id="reload-entry" ${roAttr()}>Догрузить файл</button>
+        <p class="hint">Серого статуса нет: пока вы не подтвердите догрузку, новые номера в обзвон не попадут</p>`
+          : ""
+      }
     </div>
-    <p id="upload-progress" class="hint" hidden>Загружаем контакты…</p>
-    <p class="hint" id="upload-progress-hint" hidden>Большой файл может занять несколько минут</p>
-    <p class="hint ok-line" id="upload-ok" hidden>Контакты загружены</p>
-    <div id="upload-errors"></div>
-    ${warnings.map((w) => `<p class="error">${escapeHtml(w)}</p>`).join("")}
-    <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
-    <div id="reload-precheck" class="panel nested" hidden></div>
-    <div id="new-col-alert" class="panel nested" hidden></div>
-    <h3 style="margin-top:1rem">Список</h3>
-    ${table}
-    ${started ? `<button class="btn secondary" type="button" id="reload-entry" ${roAttr()}>Догрузить файл</button>
-      <p class="hint">Серого статуса нет: пока вы не подтвердите догрузку, новые номера в обзвон не попадут</p>` : ""}
-  </div>`;
+  </section>`;
 }
 
-function campaignSchedule(camp) {
+function sectionSchedule(camp) {
+  if (!camp) {
+    return `<section class="flow-section" id="sec-schedule">
+      <h2>Расписание и перезвоны</h2>
+      <div class="panel wide"><p class="hint">Сначала создайте кампанию выше</p></div>
+    </section>`;
+  }
   const started = isStarted(camp);
   const dis = started || locked() ? "disabled" : "";
   const sch = camp.schedule || { days: [], from: "10:00", to: "18:00", tz: "Europe/Moscow" };
@@ -767,29 +863,31 @@ function campaignSchedule(camp) {
     (d) =>
       `<label class="inline"><input type="checkbox" name="day" value="${d.id}" ${sch.days?.includes(d.id) ? "checked" : ""} ${dis} /> ${d.label}</label>`
   ).join(" ");
-  return `${campaignTabs(camp.id, "schedule")}
-  <form class="panel wide" id="schedule-form">
-    ${started ? `<div class="banner banner-warn">После старта менять нельзя</div>` : ""}
-    <h2>Дни звонков</h2>
-    <div class="days">${dayChecks}</div>
-    <div class="error" id="days-error" hidden></div>
-    <h2>Время звонков</h2>
-    <label>С</label><input id="sch-from" type="time" value="${escapeHtml(sch.from || "10:00")}" ${dis} />
-    <label>До</label><input id="sch-to" type="time" value="${escapeHtml(sch.to || "18:00")}" ${dis} />
-    <div class="error" id="time-error" hidden></div>
-    <label>Часовой пояс</label>
-    <select id="sch-tz" ${dis}>
-      ${TIMEZONES.map((tz) => `<option value="${tz}" ${sch.tz === tz ? "selected" : ""}>${tz}</option>`).join("")}
-    </select>
-    <p class="hint">Дни и время считаем в этом поясе</p>
-    <div class="error" id="tz-error" hidden></div>
-    <label>Перезвоны при недозвоне</label>
-    <input id="sch-retries" type="number" min="0" max="4" value="${escapeHtml(String(camp.retries ?? 2))}" ${dis} />
-    <p class="hint">Не больше 4</p>
-    <div class="error" id="retries-error" hidden></div>
-    <p class="hint ok-line" id="sch-ok" hidden>Сохранено</p>
-    <button class="btn" type="submit" ${dis}>Сохранить</button>
-  </form>`;
+  return `<section class="flow-section" id="sec-schedule">
+    <h2>Расписание и перезвоны</h2>
+    <form class="panel wide" id="schedule-form">
+      ${started ? `<div class="banner banner-warn">После старта менять нельзя</div>` : ""}
+      <h3>Дни звонков</h3>
+      <div class="days">${dayChecks}</div>
+      <div class="error" id="days-error" hidden></div>
+      <h3>Время звонков</h3>
+      <label>С</label><input id="sch-from" type="time" value="${escapeHtml(sch.from || "10:00")}" ${dis} />
+      <label>До</label><input id="sch-to" type="time" value="${escapeHtml(sch.to || "18:00")}" ${dis} />
+      <div class="error" id="time-error" hidden></div>
+      <label>Часовой пояс</label>
+      <select id="sch-tz" ${dis}>
+        ${TIMEZONES.map((tz) => `<option value="${tz}" ${sch.tz === tz ? "selected" : ""}>${tz}</option>`).join("")}
+      </select>
+      <p class="hint">Дни и время считаем в этом поясе</p>
+      <div class="error" id="tz-error" hidden></div>
+      <label>Перезвоны при недозвоне</label>
+      <input id="sch-retries" type="number" min="0" max="4" value="${escapeHtml(String(camp.retries ?? 2))}" ${dis} />
+      <p class="hint">Не больше 4</p>
+      <div class="error" id="retries-error" hidden></div>
+      <p class="hint ok-line" id="sch-ok" hidden>Сохранено</p>
+      <button class="btn" type="submit" ${dis}>Сохранить</button>
+    </form>
+  </section>`;
 }
 
 function launchBlockReasons(camp) {
@@ -807,7 +905,8 @@ function launchBlockReasons(camp) {
   return reasons;
 }
 
-function campaignLaunch(camp) {
+function sectionLaunch(camp) {
+  if (!camp) return needCampPanel("Запуск", "sec-launch");
   const reasons = launchBlockReasons(camp);
   const canStart =
     camp.dial_state === "draft" || camp.dial_state === "stopped"
@@ -842,10 +941,10 @@ function campaignLaunch(camp) {
               let extra = "";
               if (r.money) extra = ` <span class="hint">Пополнение делает поддержка CallMate</span>`;
               if (r.action === "contacts")
-                extra += ` <a href="#/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts">Загрузить файл</a>`;
-              if (r.action === "tel") extra += ` <a href="#/cabinet/telephony">Телефония</a>`;
+                extra += ` <a href="#/cabinet" data-jump="sec-contacts">Загрузить файл</a>`;
+              if (r.action === "tel") extra += ` <a href="#/cabinet" data-jump="sec-telephony">Телефония</a>`;
               if (r.action === "schedule")
-                extra += ` <a href="#/cabinet/campaigns/${encodeURIComponent(camp.id)}/schedule">Расписание</a>`;
+                extra += ` <a href="#/cabinet" data-jump="sec-schedule">Расписание</a>`;
               if (r.weak) extra = ` <span class="hint">Допишите цель и сведения или поправьте текст</span>`;
               return `<li>${escapeHtml(r.text)}${extra}</li>`;
             })
@@ -853,47 +952,78 @@ function campaignLaunch(camp) {
           <p class="hint">Пустое имя — не мешает запуску</p>
         </div>`
       : "";
-  return `${campaignTabs(camp.id, "launch")}
-  <div class="panel wide" data-camp="${escapeHtml(camp.id)}">
+  return `<section class="flow-section" id="sec-launch">
     <h2>Запуск</h2>
-    <p>Состояние: ${dialLabel(camp.dial_state)}</p>
-    ${reasonList}
-    ${controls}
-    <div id="stop-confirm" class="panel nested" hidden>
-      <p>Остановить обзвон? Текущий разговор договорим</p>
-      <button class="btn" type="button" id="stop-yes">Стоп</button>
-      <button class="btn secondary" type="button" id="stop-no">Отмена</button>
+    <div class="panel wide" data-camp="${escapeHtml(camp.id)}">
+      <p>Состояние: ${dialLabel(camp.dial_state)}</p>
+      <p class="hint">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
+      ${reasonList}
+      ${controls}
+      <div id="stop-confirm" class="panel nested" hidden>
+        <p>Остановить обзвон? Текущий разговор договорим</p>
+        <button class="btn" type="button" id="stop-yes">Стоп</button>
+        <button class="btn secondary" type="button" id="stop-no">Отмена</button>
+      </div>
     </div>
+  </section>`;
+}
+
+function contactDrawerHtml(camp, contact) {
+  const attempts = contact.attempts || [];
+  const attemptRows = attempts.length
+    ? attempts
+        .map(
+          (a, i) => `<tr>
+          <td>${i + 1}</td>
+          <td>${escapeHtml(a.when || "")}</td>
+          <td>${escapeHtml(outcomeLabel(a.outcome))}</td>
+        </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="3">Попыток ещё не было</td></tr>`;
+  return `<div class="panel nested contact-drawer">
+    <h3>Номер</h3>
+    <p>${escapeHtml(maskPhone(contact.phone))}</p>
+    <p><strong>Статус</strong>: ${escapeHtml(statusLabel(contact.status))}
+      ${contact.status === STATUS.done ? `<span class="hint">Поговорили с человеком</span>` : ""}</p>
+    <p><strong>Вердикт</strong>: ${
+      contact.verdict ? escapeHtml(contact.verdict) : "Вердикта нет — разговора не было"
+    }</p>
+    <p class="hint">Вердикт — про цель, не про статус обзвона</p>
+    <p class="hint">Вердикт — про цель кампании, не про статус</p>
+    <h4>Попытки</h4>
+    <table class="data">
+      <thead><tr><th>№</th><th>Когда</th><th>Исход</th></tr></thead>
+      <tbody>${attemptRows}</tbody>
+    </table>
+    <h4>Разговор</h4>
+    <p class="hint">${contact.transcript ? escapeHtml(contact.transcript) : "Записи разговора пока нет"}</p>
+    <button class="btn secondary" type="button" data-collapse-status>Свернуть</button>
   </div>`;
 }
 
-/* ---------- statuses / analytics ---------- */
-
-function allContactsFlat() {
-  const rows = [];
-  for (const c of state.campaigns) {
-    for (const ct of c.contacts || []) {
-      rows.push({ ...ct, campaignId: c.id, campaignName: c.name });
-    }
-  }
-  return rows;
-}
-
-function statusesView(path) {
-  const card = matchPath(path, "/cabinet/statuses/:campId/:phone");
-  if (card) return contactCard(card.campId, card.phone);
+function sectionStatuses(camp) {
+  if (!camp) return needCampPanel("Статусы", "sec-statuses");
 
   const f = localStorage.getItem("cm_status_filter") || "all";
   const q = (localStorage.getItem("cm_status_q") || "").trim();
   const outcomeF = localStorage.getItem("cm_outcome_filter") || "all";
 
-  let list = allContactsFlat();
+  let list = (camp.contacts || []).map((ct) => ({
+    ...ct,
+    campaignId: camp.id,
+    campaignName: camp.name,
+  }));
+
   if (!list.length) {
-    return `<div class="panel wide">
-      <p>Пока нет звонков</p>
-      <p class="hint">Когда начнёте обзвон, здесь появятся номера и статусы</p>
-      <a class="btn" href="#/cabinet/campaigns">К кампании</a>
-    </div>`;
+    return `<section class="flow-section" id="sec-statuses">
+      <h2>Статусы</h2>
+      <div class="panel wide">
+        <p>Пока нет звонков</p>
+        <p class="hint">Когда начнёте обзвон, здесь появятся номера и статусы</p>
+        <a class="btn" href="#/cabinet" data-jump="sec-campaign" style="display:inline-block">К кампании</a>
+      </div>
+    </section>`;
   }
 
   if (f !== "all") list = list.filter((r) => r.status === f);
@@ -910,86 +1040,51 @@ function statusesView(path) {
     [STATUS.cancel, "Отмена"],
   ];
 
-  return `<div class="panel wide">
-    <div class="filters">
-      <label>Телефон</label>
-      <input id="status-q" placeholder="Номер или часть номера" value="${escapeHtml(q)}" />
-      <p class="hint">Поиск по номеру</p>
-      <label>Статус</label>
-      <select id="status-filter">
-        ${filters.map(([v, l]) => `<option value="${v}" ${f === v ? "selected" : ""}>${l}</option>`).join("")}
-      </select>
-      <label>Исход попытки</label>
-      <select id="outcome-filter">
-        <option value="all" ${outcomeF === "all" ? "selected" : ""}>Все</option>
-        <option value="busy" ${outcomeF === "busy" ? "selected" : ""}>Занято</option>
-        <option value="no_pickup" ${outcomeF === "no_pickup" ? "selected" : ""}>Не берёт</option>
-        <option value="voicemail" ${outcomeF === "voicemail" ? "selected" : ""}>Автоответчик</option>
-        <option value="early" ${outcomeF === "early" ? "selected" : ""}>Ранний сброс</option>
-        <option value="connected" ${outcomeF === "connected" ? "selected" : ""}>Дозвонились</option>
-      </select>
-      <button class="btn secondary" type="button" id="status-reset">Сбросить</button>
+  return `<section class="flow-section" id="sec-statuses">
+    <h2>Статусы</h2>
+    <div class="panel wide">
+      <div class="filters">
+        <label>Телефон</label>
+        <input id="status-q" placeholder="Номер или часть номера" value="${escapeHtml(q)}" />
+        <p class="hint">Поиск по номеру</p>
+        <label>Статус</label>
+        <select id="status-filter">
+          ${filters.map(([v, l]) => `<option value="${v}" ${f === v ? "selected" : ""}>${l}</option>`).join("")}
+        </select>
+        <label>Исход попытки</label>
+        <select id="outcome-filter">
+          <option value="all" ${outcomeF === "all" ? "selected" : ""}>Все</option>
+          <option value="busy" ${outcomeF === "busy" ? "selected" : ""}>Занято</option>
+          <option value="no_pickup" ${outcomeF === "no_pickup" ? "selected" : ""}>Не берёт</option>
+          <option value="voicemail" ${outcomeF === "voicemail" ? "selected" : ""}>Автоответчик</option>
+          <option value="early" ${outcomeF === "early" ? "selected" : ""}>Ранний сброс</option>
+          <option value="connected" ${outcomeF === "connected" ? "selected" : ""}>Дозвонились</option>
+        </select>
+        <button class="btn secondary" type="button" id="status-reset">Сбросить</button>
+      </div>
+      ${
+        list.length === 0
+          ? `<p>Ничего не нашли</p>`
+          : `<table class="data">
+        <thead><tr><th>Телефон</th><th>Статус</th><th>Имя</th></tr></thead>
+        <tbody>${list
+          .map((r) => {
+            const key = `${r.campaignId}|${r.phone}`;
+            const open = state.ui.statusExpandKey === key;
+            const contact = camp.contacts.find((c) => c.phone === r.phone);
+            return `<tr>
+            <td><button type="button" class="linkish" data-expand-status="${escapeHtml(key)}">${escapeHtml(maskPhone(r.phone))}</button></td>
+            <td><span class="badge">${escapeHtml(statusLabel(r.status))}</span></td>
+            <td>${escapeHtml(r.name || "")}</td>
+          </tr>
+          ${open && contact ? `<tr class="expand-row"><td colspan="3">${contactDrawerHtml(camp, contact)}</td></tr>` : ""}`;
+          })
+          .join("")}</tbody>
+      </table>`
+      }
+      <!-- FE-055: клиенту не показываем аварию обзвона -->
     </div>
-    ${
-      list.length === 0
-        ? `<p>Ничего не нашли</p>`
-        : `<table class="data">
-      <thead><tr><th>Телефон</th><th>Статус</th><th>Имя</th><th>Кампания</th></tr></thead>
-      <tbody>${list
-        .map(
-          (r) => `<tr>
-          <td><a href="#/cabinet/statuses/${encodeURIComponent(r.campaignId)}/${encodeURIComponent(r.phone)}">${escapeHtml(maskPhone(r.phone))}</a></td>
-          <td><span class="badge">${escapeHtml(statusLabel(r.status))}</span></td>
-          <td>${escapeHtml(r.name || "")}</td>
-          <td>${escapeHtml(r.campaignName || "")}</td>
-        </tr>`
-        )
-        .join("")}</tbody>
-    </table>`
-    }
-    <!-- FE-055: клиенту не показываем аварию обзвона -->
-  </div>`;
-}
-
-function contactCard(campId, phone) {
-  const camp = campaignById(campId);
-  const contact = camp?.contacts?.find((c) => c.phone === phone);
-  if (!contact) {
-    return `<div class="panel"><p>Номер не найден</p><a href="#/cabinet/statuses">К статусам</a></div>`;
-  }
-  const attempts = contact.attempts || [];
-  const attemptRows = attempts.length
-    ? attempts
-        .map(
-          (a, i) => `<tr>
-          <td>${i + 1}</td>
-          <td>${escapeHtml(a.when || "")}</td>
-          <td>${escapeHtml(outcomeLabel(a.outcome))}</td>
-        </tr>`
-        )
-        .join("")
-    : `<tr><td colspan="3">Попыток ещё не было</td></tr>`;
-  return `<div class="panel wide">
-    <p><a href="#/cabinet/statuses">← Статусы</a></p>
-    <h2>Номер</h2>
-    <p>${escapeHtml(maskPhone(contact.phone))}</p>
-    <p><strong>Статус</strong>: ${escapeHtml(statusLabel(contact.status))}
-      ${contact.status === STATUS.done ? `<span class="hint">Поговорили с человеком</span>` : ""}</p>
-    <p><strong>Вердикт</strong>: ${
-      contact.verdict
-        ? escapeHtml(contact.verdict)
-        : "Вердикта нет — разговора не было"
-    }</p>
-    <p class="hint">Вердикт — про цель, не про статус обзвона</p>
-    <p class="hint">Вердикт — про цель кампании, не про статус</p>
-    <h3>Попытки</h3>
-    <table class="data">
-      <thead><tr><th>№</th><th>Когда</th><th>Исход</th></tr></thead>
-      <tbody>${attemptRows}</tbody>
-    </table>
-    <h3>Разговор</h3>
-    <p class="hint">${contact.transcript ? escapeHtml(contact.transcript) : "Записи разговора пока нет"}</p>
-  </div>`;
+  </section>`;
 }
 
 function outcomeLabel(code) {
@@ -1003,87 +1098,37 @@ function outcomeLabel(code) {
   return map[code] || code || "—";
 }
 
-function analyticsView() {
-  const camp = state.campaigns.find(isStarted) || state.campaigns[0];
+function sectionAnalytics(camp) {
   if (!camp || !camp.analytics) {
-    return `<div class="panel wide">
-      <p>Пока нет данных по кампании</p>
-      <button class="btn secondary" type="button" disabled title="Пока нечего выгружать">Скачать Excel</button>
-      <p class="hint">Пока нечего выгружать</p>
-    </div>`;
+    return `<section class="flow-section" id="sec-analytics">
+      <h2>Аналитика</h2>
+      <div class="panel wide">
+        <p>Пока нет данных по кампании</p>
+        <button class="btn secondary" type="button" disabled title="Пока нечего выгружать">Скачать Excel</button>
+        <p class="hint">Пока нечего выгружать</p>
+      </div>
+    </section>`;
   }
   const a = camp.analytics;
-  return `<div class="panel wide">
-    <div>Звонков: ${escapeHtml(String(a.calls ?? 0))}</div>
-    <div>Средняя длительность: ${escapeHtml(a.avgDuration || "—")}</div>
-    <div><strong>До цели</strong>: ${escapeHtml(String(a.goalReached ?? 0))}</div>
-    <p class="hint">По итогам разговора относительно цели кампании</p>
-    <div><strong>Минуты разговора</strong>: ${escapeHtml(String(a.minutes ?? 0))}</div>
-    <div><strong>Ваш тариф за минуту</strong>: ${escapeHtml(String(state.companyTariff))}</div>
-    <div><strong>Стоимость кампании</strong>: ${escapeHtml(String(a.cost ?? a.minutes * state.companyTariff))}</div>
-    <p class="hint">Стоимость = минуты × ваш тариф</p>
-    <p class="hint">Минуты × тариф</p>
-    <div class="row-actions">
-      <button class="btn" type="button" id="export-excel">Скачать Excel</button>
+  return `<section class="flow-section" id="sec-analytics">
+    <h2>Аналитика</h2>
+    <div class="panel wide">
+      <div>Звонков: ${escapeHtml(String(a.calls ?? 0))}</div>
+      <div>Средняя длительность: ${escapeHtml(a.avgDuration || "—")}</div>
+      <div><strong>До цели</strong>: ${escapeHtml(String(a.goalReached ?? 0))}</div>
+      <p class="hint">По итогам разговора относительно цели кампании</p>
+      <div><strong>Минуты разговора</strong>: ${escapeHtml(String(a.minutes ?? 0))}</div>
+      <div><strong>Ваш тариф за минуту</strong>: ${escapeHtml(String(state.companyTariff))}</div>
+      <div><strong>Стоимость кампании</strong>: ${escapeHtml(String(a.cost ?? a.minutes * state.companyTariff))}</div>
+      <p class="hint">Стоимость = минуты × ваш тариф</p>
+      <p class="hint">Минуты × тариф</p>
+      <div class="row-actions">
+        <button class="btn" type="button" id="export-excel">Скачать Excel</button>
+      </div>
+      <p class="hint" id="export-status" hidden></p>
+      <div class="error" id="export-error" hidden></div>
     </div>
-    <p class="hint" id="export-status" hidden></p>
-    <div class="error" id="export-error" hidden></div>
-  </div>`;
-}
-
-function checklistView() {
-  return `<div class="panel wide">
-    <h2>Чеклист выпуска</h2>
-    <ul>
-      <li>Вход общий; суперадмин → админка</li>
-      <li>Создать компанию = поля регистрации</li>
-      <li>Lock; баланс; пауза/стоп</li>
-      <li>Вердикты read-only; фильтр исходов</li>
-      <li>Темы; только десктоп</li>
-    </ul>
-    <p class="hint">Внутренняя сверка; не для клиента кабинета</p>
-  </div>`;
-}
-
-function cabinetContent(path) {
-  if (path === "/cabinet/_checklist") return checklistView();
-  if (path.startsWith("/cabinet/telephony/sip")) return sipForm();
-  if (path.startsWith("/cabinet/telephony/mango")) return mangoForm();
-  if (path.startsWith("/cabinet/telephony")) return telephonyOverview();
-  if (path.startsWith("/cabinet/statuses")) return statusesView(path);
-  if (path.startsWith("/cabinet/analytics")) return analyticsView();
-  if (path === "/cabinet/campaigns/new") return newCampaignForm();
-
-  const launch = matchPath(path, "/cabinet/campaigns/:id/launch");
-  if (launch) {
-    const c = campaignById(launch.id);
-    return c ? campaignLaunch(c) : notFoundCamp();
-  }
-  const scenario = matchPath(path, "/cabinet/campaigns/:id/scenario");
-  if (scenario) {
-    const c = campaignById(scenario.id);
-    return c ? campaignScenario(c) : notFoundCamp();
-  }
-  const contacts = matchPath(path, "/cabinet/campaigns/:id/contacts");
-  if (contacts) {
-    const c = campaignById(contacts.id);
-    return c ? campaignContacts(c) : notFoundCamp();
-  }
-  const schedule = matchPath(path, "/cabinet/campaigns/:id/schedule");
-  if (schedule) {
-    const c = campaignById(schedule.id);
-    return c ? campaignSchedule(c) : notFoundCamp();
-  }
-  const one = matchPath(path, "/cabinet/campaigns/:id");
-  if (one) {
-    const c = campaignById(one.id);
-    return c ? campaignOverview(c) : notFoundCamp();
-  }
-  return campaignList();
-}
-
-function notFoundCamp() {
-  return `<div class="panel"><p>Кампанию не нашли</p><a href="#/cabinet/campaigns">К кампаниям</a></div>`;
+  </section>`;
 }
 
 function maskPhone(phone) {
@@ -1119,9 +1164,9 @@ function loginView() {
 function forbiddenView() {
   let action = `<button class="btn" id="forbidden-action" type="button">Войти</button>`;
   if (state.session && state.role === "company") {
-    action = `<button class="btn" id="forbidden-action" type="button">К кампаниям</button>`;
+    action = `<button class="btn" id="forbidden-action" type="button">В кабинет</button>`;
   } else if (state.session && state.role === "superadmin") {
-    action = `<button class="btn" id="forbidden-action" type="button">К компаниям</button>`;
+    action = `<button class="btn" id="forbidden-action" type="button">В админку</button>`;
   }
   return `<div class="login-wrap">
     <section class="login-hero" aria-label="CallMate">
@@ -1141,27 +1186,29 @@ function forbiddenView() {
 
 function render() {
   setTheme(state.theme);
-  const app = document.getElementById("app");
   const path = route();
+  if (normalizeRoute(path)) return;
 
-  if (path.startsWith("/cabinet")) {
+  const app = document.getElementById("app");
+
+  if (path === "/cabinet") {
     const canCabinet =
       state.session && (state.role === "company" || (state.role === "superadmin" && state.impersonate));
     if (!canCabinet) {
       navigate("/forbidden");
       return;
     }
-    app.innerHTML = cabinetShell(path);
+    app.innerHTML = cabinetShell();
     bindShell();
     clearFlashSoon();
     return;
   }
-  if (path.startsWith("/admin")) {
+  if (path === "/admin") {
     if (!state.session || state.role !== "superadmin") {
       navigate("/forbidden");
       return;
     }
-    app.innerHTML = adminShell(path);
+    app.innerHTML = adminShell();
     bindShell();
     clearFlashSoon();
     return;
@@ -1178,8 +1225,8 @@ function render() {
 function bindForbidden() {
   document.getElementById("forbidden-action").onclick = () => {
     if (!state.session) navigate("/login");
-    else if (state.role === "company" || state.impersonate) navigate("/cabinet/campaigns");
-    else if (state.role === "superadmin") navigate("/admin/companies");
+    else if (state.role === "company" || state.impersonate) navigate("/cabinet");
+    else if (state.role === "superadmin") navigate("/admin");
     else navigate("/login");
   };
   document.getElementById("forbidden-logout").onclick = async () => {
@@ -1187,6 +1234,25 @@ function bindForbidden() {
     clearSession();
     navigate("/login");
   };
+}
+
+function bindJumpNav() {
+  document.querySelectorAll("[data-jump]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      const id = el.getAttribute("data-jump");
+      const expand = el.getAttribute("data-expand-status");
+      if (expand) {
+        state.ui.statusExpandKey = expand;
+        render();
+        requestAnimationFrame(() => {
+          document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        return;
+      }
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
 }
 
 function bindShell() {
@@ -1206,11 +1272,12 @@ function bindShell() {
     exitImp.onclick = () => {
       state.impersonate = null;
       localStorage.removeItem("cm_impersonate");
-      navigate("/admin/companies");
+      navigate("/admin");
       render();
     };
   }
 
+  bindJumpNav();
   bindAdminForms();
   bindCampaignForms();
   bindTelephony();
@@ -1258,8 +1325,9 @@ function bindAdminForms() {
         err.textContent = "Такой логин уже есть";
         return;
       }
+      const id = `co-${Date.now()}`;
       state.companies.push({
-        id: `co-${Date.now()}`,
+        id,
         name,
         login,
         access_status: "active",
@@ -1271,6 +1339,8 @@ function bindAdminForms() {
       persistCompanies();
       document.getElementById("co-ok").hidden = false;
       err.hidden = true;
+      state.ui.adminExpandedId = id;
+      render();
     };
   }
 
@@ -1290,6 +1360,21 @@ function bindAdminForms() {
       err.hidden = true;
       ok.hidden = false;
       localStorage.setItem("cm_default_tariff", String(v));
+    };
+  }
+
+  document.querySelectorAll("[data-expand-company]").forEach((btn) => {
+    btn.onclick = () => {
+      const id = btn.getAttribute("data-expand-company");
+      state.ui.adminExpandedId = String(state.ui.adminExpandedId) === String(id) ? null : id;
+      render();
+    };
+  });
+  const collapse = document.querySelector("[data-collapse-company]");
+  if (collapse) {
+    collapse.onclick = () => {
+      state.ui.adminExpandedId = null;
+      render();
     };
   }
 
@@ -1314,11 +1399,7 @@ function bindAdminForms() {
       persistCompanies();
       err.hidden = true;
       ok.hidden = false;
-      const mins = c.price_per_minute > 0 ? Math.floor(c.balance / c.price_per_minute) : 0;
-      const hint = document.createElement("p");
-      hint.className = "hint";
-      hint.textContent = `≈ ${mins} мин по текущему тарифу`;
-      ok.after(hint);
+      render();
     };
   }
 
@@ -1329,7 +1410,7 @@ function bindAdminForms() {
       state.impersonate = { id: c.id, name: c.name };
       saveJson("cm_impersonate", state.impersonate);
       state.companyLocked = c.access_status === "locked";
-      navigate("/cabinet/campaigns");
+      navigate("/cabinet");
       render();
     };
   }
@@ -1351,9 +1432,10 @@ function bindAdminForms() {
     };
   }
   const lockCancel = document.getElementById("lock-cancel");
-  if (lockCancel) lockCancel.onclick = () => {
-    document.getElementById("lock-dialog").hidden = true;
-  };
+  if (lockCancel)
+    lockCancel.onclick = () => {
+      document.getElementById("lock-dialog").hidden = true;
+    };
   const lockConfirm = document.getElementById("lock-confirm");
   if (lockConfirm) {
     lockConfirm.onclick = () => {
@@ -1388,6 +1470,40 @@ function bindAdminForms() {
 }
 
 function bindCampaignForms() {
+  const select = document.getElementById("active-campaign-select");
+  if (select) {
+    select.onchange = () => {
+      setActiveCampaignId(select.value);
+      state.ui.statusExpandKey = null;
+      state.ui.showNewCampaign = false;
+      render();
+    };
+  }
+
+  const showNew = document.getElementById("show-new-campaign");
+  if (showNew) {
+    showNew.onclick = () => {
+      state.ui.showNewCampaign = true;
+      render();
+      document.getElementById("sec-campaign")?.scrollIntoView({ behavior: "smooth" });
+    };
+  }
+  const showFromScenario = document.getElementById("show-new-campaign-from-scenario");
+  if (showFromScenario) {
+    showFromScenario.onclick = () => {
+      state.ui.showNewCampaign = true;
+      render();
+      document.getElementById("sec-campaign")?.scrollIntoView({ behavior: "smooth" });
+    };
+  }
+  const cancelNew = document.getElementById("cancel-new-campaign");
+  if (cancelNew) {
+    cancelNew.onclick = () => {
+      state.ui.showNewCampaign = false;
+      render();
+    };
+  }
+
   const newCampaignForm = document.getElementById("new-campaign-form");
   if (newCampaignForm) {
     newCampaignForm.onsubmit = (e) => {
@@ -1418,14 +1534,17 @@ function bindCampaignForms() {
       });
       state.campaigns.push(camp);
       persistCampaigns();
-      navigate(`/cabinet/campaigns/${camp.id}`);
+      setActiveCampaignId(camp.id);
+      state.ui.showNewCampaign = false;
+      flash("Кампания создана");
+      render();
+      document.getElementById("sec-scenario")?.scrollIntoView({ behavior: "smooth" });
     };
   }
 
   const saveScenario = document.getElementById("save-scenario");
   if (saveScenario) {
-    const campId = route().split("/")[3];
-    const camp = campaignById(campId);
+    const camp = activeCampaign();
     saveScenario.onclick = () => {
       if (!camp || isStarted(camp) || locked()) return;
       camp.scenarioText = document.getElementById("scenario-text").value;
@@ -1440,10 +1559,13 @@ function bindCampaignForms() {
       persistCampaigns();
       document.getElementById("scenario-ok").hidden = false;
     };
-    document.getElementById("insert-attr").onclick = () => {
-      const picker = document.getElementById("attr-picker");
-      picker.hidden = !picker.hidden;
-    };
+    const insertAttr = document.getElementById("insert-attr");
+    if (insertAttr) {
+      insertAttr.onclick = () => {
+        const picker = document.getElementById("attr-picker");
+        picker.hidden = !picker.hidden;
+      };
+    }
     document.querySelectorAll(".attr-pick").forEach((btn) => {
       btn.onclick = () => {
         const ta = document.getElementById("scenario-text");
@@ -1474,8 +1596,7 @@ function bindCampaignForms() {
   if (scheduleForm) {
     scheduleForm.onsubmit = (e) => {
       e.preventDefault();
-      const campId = route().split("/")[3];
-      const camp = campaignById(campId);
+      const camp = activeCampaign();
       if (!camp || isStarted(camp) || locked()) return;
       const days = [...scheduleForm.querySelectorAll("input[name=day]:checked")].map((el) => el.value);
       const daysErr = document.getElementById("days-error");
@@ -1537,6 +1658,19 @@ function saveLinesFromForm() {
 }
 
 function bindTelephony() {
+  document.querySelectorAll("[data-open-tel]").forEach((btn) => {
+    btn.onclick = () => {
+      state.ui.telephonyPanel = btn.getAttribute("data-open-tel");
+      render();
+    };
+  });
+  document.querySelectorAll("[data-close-tel-panel]").forEach((btn) => {
+    btn.onclick = () => {
+      state.ui.telephonyPanel = null;
+      render();
+    };
+  });
+
   const linesForm = document.getElementById("lines-form");
   if (linesForm) {
     linesForm.onsubmit = (e) => {
@@ -1554,7 +1688,6 @@ function bindTelephony() {
       if (!saveLinesFromForm()) return;
       state.telephony.sipSaved = true;
       state.telephony.provider = "sip";
-      // password never stored in demo state
       document.getElementById("sip-password").value = "";
       persistTelephony();
       flash("Сохранено");
@@ -1581,8 +1714,8 @@ function bindTelephony() {
         state.telephony.status = "ok";
         state.telephony.provider = "mango";
         state.telephony.lastError = null;
+        state.ui.telephonyPanel = null;
         persistTelephony();
-        navigate("/cabinet/telephony");
         flash("Телефония подключена");
         render();
       }, 600);
@@ -1601,12 +1734,12 @@ function runSipCheck(result) {
       state.telephony.status = "ok";
       state.telephony.provider = state.telephony.provider || "sip";
       state.telephony.lastError = null;
+      state.ui.telephonyPanel = null;
     } else {
       state.telephony.status = "error";
       state.telephony.lastError = result;
     }
     persistTelephony();
-    navigate("/cabinet/telephony");
     render();
   }, 700);
 }
@@ -1630,11 +1763,7 @@ function bindContacts() {
     };
   }
 
-  const campId = (() => {
-    const m = matchPath(route(), "/cabinet/campaigns/:id/contacts");
-    return m?.id;
-  })();
-  const camp = campId ? campaignById(campId) : null;
+  const camp = activeCampaign();
 
   const cancelBtn = document.getElementById("cancel-contacts");
   if (cancelBtn && camp) {
@@ -1686,8 +1815,7 @@ function bindContacts() {
 
 function simulateUpload(file) {
   if (!file || locked()) return;
-  const campId = matchPath(route(), "/cabinet/campaigns/:id/contacts")?.id;
-  const camp = campaignById(campId);
+  const camp = activeCampaign();
   if (!camp) return;
 
   const progress = document.getElementById("upload-progress");
@@ -1703,7 +1831,6 @@ function simulateUpload(file) {
   setTimeout(() => {
     progress.hidden = true;
     hint.hidden = true;
-    // demo parse: good + bad phone + column warning
     const demoContacts = [
       { phone: "+79001112233", name: "Анна", status: STATUS.in_progress, attempts: [], verdict: null },
       { phone: "bad", name: "", status: STATUS.in_progress, attempts: [], verdict: null, bad: true },
@@ -1723,7 +1850,6 @@ function simulateUpload(file) {
     camp.columns = [...new Set([...had, ...newCols])];
 
     if (camp.contacts?.length) {
-      // reload path
       showReloadPrecheck(camp, good, brandNew);
       return;
     }
@@ -1733,7 +1859,6 @@ function simulateUpload(file) {
       return;
     }
 
-    // name column may be empty — OK (FE-051)
     camp.uploadWarnings = [];
     if (!camp.scenarioText?.includes("{город}") && camp.scenarioText?.includes("{компания}")) {
       camp.uploadWarnings.push('Нет столбца «компания» в файле');
@@ -1818,17 +1943,12 @@ function showReloadPrecheck(camp, incoming, brandNew) {
     persistCampaigns();
     box.hidden = true;
     flash(`Догрузка принята: +${added} новых, обновлено ${updated}`);
-    const tip = document.createElement("p");
-    tip.className = "hint";
-    tip.textContent = "В живой обзвон сразу не попадёт — возьмёт очередь";
-    document.querySelector(".main")?.appendChild(tip);
     render();
   };
 }
 
 function bindLaunch() {
-  const campId = matchPath(route(), "/cabinet/campaigns/:id/launch")?.id;
-  const camp = campId ? campaignById(campId) : null;
+  const camp = activeCampaign();
   if (!camp) return;
 
   const start = document.getElementById("dial-start");
@@ -1839,7 +1959,6 @@ function bindLaunch() {
       if (prog) prog.hidden = false;
       setTimeout(() => {
         camp.dial_state = "running";
-        // seed demo status data
         for (const ct of camp.contacts || []) {
           if (!ct.attempts?.length) {
             ct.status = STATUS.in_progress;
@@ -1897,9 +2016,10 @@ function bindLaunch() {
     };
   }
   const stopNo = document.getElementById("stop-no");
-  if (stopNo) stopNo.onclick = () => {
-    document.getElementById("stop-confirm").hidden = true;
-  };
+  if (stopNo)
+    stopNo.onclick = () => {
+      document.getElementById("stop-confirm").hidden = true;
+    };
 }
 
 function bindStatuses() {
@@ -1933,6 +2053,22 @@ function bindStatuses() {
       render();
     };
   }
+
+  document.querySelectorAll("[data-expand-status]").forEach((btn) => {
+    if (btn.hasAttribute("data-jump")) return;
+    btn.onclick = () => {
+      const key = btn.getAttribute("data-expand-status");
+      state.ui.statusExpandKey = state.ui.statusExpandKey === key ? null : key;
+      render();
+    };
+  });
+  const collapse = document.querySelector("[data-collapse-status]");
+  if (collapse) {
+    collapse.onclick = () => {
+      state.ui.statusExpandKey = null;
+      render();
+    };
+  }
 }
 
 function bindAnalytics() {
@@ -1949,7 +2085,6 @@ function bindAnalytics() {
       st.textContent = "";
       st.hidden = true;
       btn.disabled = false;
-      // demo download of CSV stand-in
       const blob = new Blob(["campaign,minutes,cost\n"], { type: "text/csv" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -1999,7 +2134,7 @@ function bindLogin() {
       localStorage.setItem("cm_session", data.session);
       localStorage.setItem("cm_role", data.role);
       localStorage.setItem("cm_locked", state.companyLocked ? "1" : "0");
-      navigate(data.role === "superadmin" ? "/admin/companies" : "/cabinet/campaigns");
+      navigate(data.role === "superadmin" ? "/admin" : "/cabinet");
     } catch {
       document.getElementById("password").value = "";
       err.hidden = false;
