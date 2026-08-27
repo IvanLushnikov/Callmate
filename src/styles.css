@@ -400,7 +400,8 @@ table.data th {
   .preview-grid { grid-template-columns: 1fr; }
   .desktop-note { display: block; }
   .page-topbar { flex-wrap: wrap; }
-  .flow-nav { top: 0; }
+  .workspace-bar { top: 0; }
+  .workspace-grid { grid-template-columns: 1fr; }
 }
 
 /* —— Single-page cabinet / admin —— */
@@ -422,6 +423,7 @@ table.data th {
   background: color-mix(in srgb, var(--surface-solid) 82%, transparent);
   backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
 }
 
 .page-topbar .brand { margin: 0; font-size: 1.35rem; }
@@ -430,48 +432,129 @@ table.data th {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  margin-left: auto;
 }
 
 .page-topbar .theme-switch { margin-top: 0; }
 
 .page-topbar .btn { margin-top: 0; }
 
-.flow-nav {
-  position: sticky;
-  top: 58px;
-  z-index: 15;
+.app-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
-  padding: 0.55rem 1.25rem;
-  background: color-mix(in srgb, var(--bg1) 88%, transparent);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--line);
+  gap: 0.25rem;
+  align-items: center;
 }
 
-.flow-nav a {
-  padding: 0.4rem 0.75rem;
-  border-radius: 999px;
+.app-tabs a {
+  padding: 0.45rem 0.85rem;
+  border-radius: 12px;
   color: var(--muted);
+  font-weight: 650;
+  font-size: 0.92rem;
   border: 1px solid transparent;
-  font-weight: 600;
-  font-size: 0.88rem;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.flow-nav a:hover {
+.app-tabs a:hover {
   color: var(--ink);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+.app-tabs a.active {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.back-link {
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 650;
+  margin-bottom: 0.75rem;
+  text-decoration: none;
+}
+
+.back-link:hover { text-decoration: underline; }
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.workspace-bar {
+  position: sticky;
+  top: 58px;
+  z-index: 12;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  padding: 0.75rem 0;
+  margin-bottom: 0.5rem;
+  background: color-mix(in srgb, var(--bg1) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+
+.workspace-bar .back-link { margin-bottom: 0; }
+
+.workspace-title {
+  font-family: "Syne", sans-serif;
+  font-size: 1.25rem;
+  margin: 0;
+  letter-spacing: -0.03em;
+  flex: 1 1 auto;
+  min-width: 8rem;
+}
+
+.workspace-actions { margin-top: 0; gap: 0.5rem; }
+.workspace-actions .btn { margin-top: 0; }
+.workspace-bar > .btn { margin-top: 0; }
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0 1.25rem;
+}
+
+@media (min-width: 960px) {
+  .workspace-grid {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.section-head h2 { margin-bottom: 0; }
+.section-head .btn { margin-top: 0; }
+
+.panel.wide .data a,
+.panel.wide a:not(.btn):not(.back-link) {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.panel.wide .data a:hover { text-decoration: underline; }
+
 .page {
-  width: min(100%, 1040px);
+  width: min(100%, 1100px);
   margin: 0 auto;
   padding: 1.35rem 1.25rem 3rem;
 }
 
 .flow-section {
   margin-bottom: 2rem;
-  scroll-margin-top: 120px;
+  scroll-margin-top: 130px;
 }
 
 .flow-section > h2 {
@@ -498,3 +581,6 @@ button.linkish:hover { text-decoration: underline; }
 .nested-form { margin: 0.75rem 0; }
 
 .contact-drawer h4 { margin: 0.85rem 0 0.35rem; }
+
+/* legacy flow-nav kept harmless if any remnant markup appears */
+.flow-nav { display: none; }

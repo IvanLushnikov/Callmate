@@ -47,14 +47,16 @@ const TIMEZONES = [
   "Asia/Vladivostok",
 ];
 
-const FLOW_NAV = [
-  { id: "sec-telephony", label: "Телефония" },
-  { id: "sec-campaign", label: "Кампания" },
-  { id: "sec-scenario", label: "Сценарий" },
-  { id: "sec-contacts", label: "Контакты" },
-  { id: "sec-launch", label: "Запуск" },
-  { id: "sec-statuses", label: "Статусы" },
-  { id: "sec-analytics", label: "Аналитика" },
+const CABINET_TABS = [
+  { id: "campaigns", label: "Кампании", href: "#/cabinet/campaigns" },
+  { id: "integrations", label: "Интеграции", href: "#/cabinet/integrations" },
+  { id: "analytics", label: "Аналитика", href: "#/cabinet/analytics" },
+  { id: "account", label: "Аккаунт", href: "#/cabinet/account" },
+];
+
+const ADMIN_TABS = [
+  { id: "companies", label: "Компании", href: "#/admin" },
+  { id: "settings", label: "Настройки", href: "#/admin/settings" },
 ];
 
 function loadJson(key, fallback) {
@@ -166,32 +168,59 @@ function matchPath(path, pattern) {
   return params;
 }
 
-/** Redirect legacy deep links; preserve campaign id when present. */
+/** Parse cabinet hash into page descriptor. */
+function parseCabinet(path) {
+  if (path === "/cabinet" || path === "/cabinet/campaigns") return { tab: "campaigns", page: "list" };
+  if (path === "/cabinet/campaigns/new") return { tab: "campaigns", page: "new" };
+  const ws = matchPath(path, "/cabinet/campaigns/:id");
+  if (ws?.id && ws.id !== "new") return { tab: "campaigns", page: "workspace", id: ws.id };
+  if (path === "/cabinet/integrations") return { tab: "integrations", page: "integrations" };
+  if (path === "/cabinet/analytics") return { tab: "analytics", page: "analytics" };
+  if (path === "/cabinet/account") return { tab: "account", page: "account" };
+  return null;
+}
+
+/** Redirect legacy / unknown deep links; keep valid cabinet routes. */
 function normalizeRoute(path) {
-  if (path.startsWith("/cabinet") && path !== "/cabinet") {
-    if (path === "/cabinet/campaigns/new") {
-      state.ui.showNewCampaign = true;
-      navigate("/cabinet");
+  if (path.startsWith("/cabinet")) {
+    if (path === "/cabinet") {
+      navigate("/cabinet/campaigns");
       return true;
     }
-    const fromCamp =
-      matchPath(path, "/cabinet/campaigns/:id") ||
+    if (parseCabinet(path)) {
+      const parsed = parseCabinet(path);
+      if (parsed.page === "workspace") setActiveCampaignId(parsed.id);
+      if (parsed.page === "new") state.ui.showNewCampaign = true;
+      return false;
+    }
+    const legacySub =
       matchPath(path, "/cabinet/campaigns/:id/scenario") ||
       matchPath(path, "/cabinet/campaigns/:id/contacts") ||
       matchPath(path, "/cabinet/campaigns/:id/schedule") ||
       matchPath(path, "/cabinet/campaigns/:id/launch");
+    if (legacySub?.id && legacySub.id !== "new") {
+      setActiveCampaignId(legacySub.id);
+      navigate(`/cabinet/campaigns/${legacySub.id}`);
+      return true;
+    }
     const fromStatus = matchPath(path, "/cabinet/statuses/:campId/:phone");
     const fromStatusCamp = matchPath(path, "/cabinet/statuses/:campId");
-    if (fromCamp?.id && fromCamp.id !== "new") setActiveCampaignId(fromCamp.id);
-    else if (fromStatus?.campId) {
+    if (fromStatus?.campId) {
       setActiveCampaignId(fromStatus.campId);
       state.ui.statusExpandKey = `${fromStatus.campId}|${fromStatus.phone}`;
-    } else if (fromStatusCamp?.campId) setActiveCampaignId(fromStatusCamp.campId);
-    navigate("/cabinet");
+      navigate(`/cabinet/campaigns/${fromStatus.campId}`);
+      return true;
+    }
+    if (fromStatusCamp?.campId) {
+      setActiveCampaignId(fromStatusCamp.campId);
+      navigate(`/cabinet/campaigns/${fromStatusCamp.campId}`);
+      return true;
+    }
+    navigate("/cabinet/campaigns");
     return true;
   }
-  if (path.startsWith("/admin") && path !== "/admin") {
-    if (path !== "/admin/companies/new" && path !== "/admin/settings") {
+  if (path.startsWith("/admin") && path !== "/admin" && path !== "/admin/settings") {
+    if (path !== "/admin/companies/new") {
       const card = matchPath(path, "/admin/companies/:id");
       const topup = matchPath(path, "/admin/companies/:id/topup");
       if (card?.id && card.id !== "new") state.ui.adminExpandedId = card.id;
@@ -296,38 +325,48 @@ function impersonateBanner() {
   </div>`;
 }
 
-function flowNavHtml() {
-  return `<nav class="flow-nav" aria-label="Разделы кабинета">
-    ${FLOW_NAV.map(
-      (item) =>
-        `<a href="#/cabinet" data-jump="${item.id}">${item.label}</a>`
-    ).join("")}
+function appTabsHtml(activeTab, tabs = CABINET_TABS) {
+  return `<nav class="app-tabs" aria-label="Разделы кабинета">
+    ${tabs
+      .map(
+        (t) =>
+          `<a href="${t.href}" class="${t.id === activeTab ? "active" : ""}">${escapeHtml(t.label)}</a>`
+      )
+      .join("")}
   </nav>`;
 }
 
-function cabinetShell() {
+function cabinetShell(activeTab, bodyHtml) {
   return `<div class="page-shell">
     <header class="page-topbar">
       <p class="brand">CallMate</p>
+      ${appTabsHtml(activeTab)}
       <div class="page-topbar-actions">
         ${themeControls()}
         <button class="btn secondary" id="logout" type="button">Выйти</button>
       </div>
     </header>
-    ${flowNavHtml()}
     <main class="page">
       ${impersonateBanner()}
       ${lockedBanner()}
       ${flashHtml()}
-      ${cabinetPage()}
+      ${bodyHtml}
     </main>
   </div>`;
 }
 
-function adminShell() {
+function adminShell(activeTab = "companies") {
+  const body =
+    activeTab === "settings"
+      ? `<section class="flow-section" id="sec-admin-settings">
+        <h2>Настройки продукта</h2>
+        ${adminSettings()}
+      </section>`
+      : `${adminNewCompany()}${adminCompanyList()}`;
   return `<div class="page-shell">
     <header class="page-topbar">
       <p class="brand">CallMate · Админка</p>
+      ${appTabsHtml(activeTab, ADMIN_TABS)}
       <div class="page-topbar-actions">
         ${themeControls()}
         <button class="btn secondary" id="logout" type="button">Выйти</button>
@@ -335,21 +374,12 @@ function adminShell() {
     </header>
     <main class="page">
       ${flashHtml()}
-      ${adminPage()}
+      ${body}
     </main>
   </div>`;
 }
 
-/* ---------- admin (one page) ---------- */
-
-function adminPage() {
-  return `${adminNewCompany()}
-  ${adminCompanyList()}
-  <section class="flow-section" id="sec-admin-settings">
-    <h2>Настройки продукта</h2>
-    ${adminSettings()}
-  </section>`;
-}
+/* ---------- admin ---------- */
 
 function adminCompanyList() {
   if (!state.companies.length) {
@@ -504,18 +534,362 @@ function ensureVerdicts(camp) {
   return ["Дошли до цели", "Не дошли", "Перезвонить позже"];
 }
 
-function cabinetPage() {
+function cabinetBody(parsed) {
+  if (parsed.page === "integrations") return sectionTelephony();
+  if (parsed.page === "analytics") return pageAnalytics();
+  if (parsed.page === "account") return pageAccount();
+  if (parsed.page === "new") return pageCampaignNew();
+  if (parsed.page === "workspace") {
+    const camp = campaignById(parsed.id);
+    if (!camp) {
+      return `<div class="panel wide"><p>Кампания не найдена</p>
+        <a class="back-link" href="#/cabinet/campaigns">← К кампаниям</a></div>`;
+    }
+    return campaignWorkspace(camp);
+  }
+  return pageCampaignList();
+}
+
+function pageCampaignList() {
+  const createBtn = locked()
+    ? `<button class="btn" type="button" disabled>Создать кампанию</button>
+       <p class="hint">Аккаунт заблокирован</p>`
+    : `<a class="btn" href="#/cabinet/campaigns/new" style="display:inline-block">Создать кампанию</a>`;
+
+  if (!state.campaigns.length) {
+    return `<section class="flow-section" id="sec-campaign">
+      <h2>Кампании</h2>
+      <div class="panel wide">
+        <p>Создайте первую кампанию</p>
+        ${createBtn}
+      </div>
+    </section>`;
+  }
+
+  const rows = state.campaigns
+    .map(
+      (c) => `<tr>
+        <td><a href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">${escapeHtml(c.name || "Без названия")}</a></td>
+        <td><span class="badge">${escapeHtml(dialLabel(c.dial_state))}</span></td>
+        <td>${escapeHtml(c.goal || "—")}</td>
+        <td>${(c.contacts || []).length}</td>
+      </tr>`
+    )
+    .join("");
+
+  return `<section class="flow-section" id="sec-campaign">
+    <div class="section-head">
+      <h2>Кампании</h2>
+      ${createBtn}
+    </div>
+    <div class="panel wide">
+      <table class="data">
+        <thead><tr><th>Название</th><th>Состояние</th><th>Цель</th><th>Номеров</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </section>`;
+}
+
+function pageCampaignNew() {
+  if (locked()) {
+    return `<section class="flow-section">
+      <a class="back-link" href="#/cabinet/campaigns">← К кампаниям</a>
+      <h2>Новая кампания</h2>
+      <div class="panel wide"><p class="hint">Аккаунт заблокирован</p></div>
+    </section>`;
+  }
+  return `<section class="flow-section" id="sec-campaign">
+    <a class="back-link" href="#/cabinet/campaigns">← К кампаниям</a>
+    <h2>Новая кампания</h2>
+    ${newCampaignFormInline()}
+  </section>`;
+}
+
+function pageAccount() {
+  const who = state.impersonate
+    ? `Кабинет «${escapeHtml(state.impersonate.name || "")}» (суперадмин)`
+    : "Кабинет компании";
+  return `<section class="flow-section" id="sec-account">
+    <h2>Аккаунт</h2>
+    <div class="panel wide">
+      <p><strong>${who}</strong></p>
+      ${
+        state.companyLocked && !state.impersonate
+          ? `<div class="banner banner-danger"><strong>Аккаунт заблокирован. Можно смотреть, менять и запускать нельзя</strong>
+             <p class="hint">Чтобы снять блокировку, напишите в поддержку CallMate</p></div>`
+          : `<p class="hint">Доступ активен</p>`
+      }
+      <p>Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
+      <p class="hint">Пополнение делает поддержка CallMate</p>
+      <p class="hint">Тема оформления — в шапке страницы</p>
+    </div>
+  </section>`;
+}
+
+function pageAnalytics() {
   const camp = activeCampaign();
-  return `
-    ${sectionTelephony()}
-    ${sectionCampaign(camp)}
-    ${sectionScenario(camp)}
-    ${sectionContacts(camp)}
-    ${sectionSchedule(camp)}
-    ${sectionLaunch(camp)}
-    ${sectionStatuses(camp)}
-    ${sectionAnalytics(camp)}
-  `;
+  const listMetrics = state.campaigns.length
+    ? `<table class="data" style="margin-top:1rem">
+        <thead><tr><th>Кампания</th><th>Состояние</th><th>Звонков</th><th>До цели</th></tr></thead>
+        <tbody>${state.campaigns
+          .map((c) => {
+            const a = c.analytics;
+            return `<tr>
+              <td><a href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">${escapeHtml(c.name || "Без названия")}</a></td>
+              <td>${escapeHtml(dialLabel(c.dial_state))}</td>
+              <td>${escapeHtml(String(a?.calls ?? "—"))}</td>
+              <td>${escapeHtml(String(a?.goalReached ?? "—"))}</td>
+            </tr>`;
+          })
+          .join("")}</tbody>
+      </table>`
+    : `<p class="hint">Пока нет кампаний</p>`;
+
+  return `<section class="flow-section" id="sec-analytics">
+    <h2>Аналитика</h2>
+    <div class="panel wide">
+      <h3>Выбранная кампания</h3>
+      ${camp ? blockCampaignAnalytics(camp) : `<p>Пока нет данных по кампании</p>`}
+      <h3 style="margin-top:1.25rem">Все кампании</h3>
+      ${listMetrics}
+    </div>
+  </section>`;
+}
+
+function blockCampaignAnalytics(camp) {
+  if (!camp.analytics) {
+    return `<p>Пока нет данных по кампании</p>
+      <button class="btn secondary" type="button" disabled title="Пока нечего выгружать">Скачать Excel</button>
+      <p class="hint">Пока нечего выгружать</p>`;
+  }
+  const a = camp.analytics;
+  return `<div>
+      <p class="hint">${escapeHtml(camp.name || "Без названия")}</p>
+      <div>Звонков: ${escapeHtml(String(a.calls ?? 0))}</div>
+      <div>Средняя длительность: ${escapeHtml(a.avgDuration || "—")}</div>
+      <div><strong>До цели</strong>: ${escapeHtml(String(a.goalReached ?? 0))}</div>
+      <p class="hint">По итогам разговора относительно цели кампании</p>
+      <div><strong>Минуты разговора</strong>: ${escapeHtml(String(a.minutes ?? 0))}</div>
+      <div><strong>Ваш тариф за минуту</strong>: ${escapeHtml(String(state.companyTariff))}</div>
+      <div><strong>Стоимость кампании</strong>: ${escapeHtml(String(a.cost ?? a.minutes * state.companyTariff))}</div>
+      <p class="hint">Стоимость = минуты × ваш тариф</p>
+      <div class="row-actions">
+        <button class="btn" type="button" id="export-excel">Скачать Excel</button>
+      </div>
+      <p class="hint" id="export-status" hidden></p>
+      <div class="error" id="export-error" hidden></div>
+    </div>`;
+}
+
+function telephonyStatusCompact() {
+  const t = state.telephony;
+  let statusLine = "Телефония не подключена";
+  if (t.checking) statusLine = "Проверяем подключение…";
+  else if (t.status === "ok") statusLine = "Телефония подключена";
+  else if (t.status === "error") {
+    statusLine = ERROR_BY_CODE[t.lastError] || ERROR_BY_CODE.sip_unknown;
+  }
+  const lines =
+    t.lines != null ? `<p class="hint">Линий: ${escapeHtml(String(t.lines))}</p>` : "";
+  return `<p><strong>${escapeHtml(statusLine)}</strong></p>
+    ${lines}
+    <a class="btn secondary" href="#/cabinet/integrations" style="display:inline-block">Настроить в Интеграциях</a>`;
+}
+
+function dialActionsHtml(camp) {
+  const reasons = launchBlockReasons(camp);
+  const canStart =
+    camp.dial_state === "draft" || camp.dial_state === "stopped"
+      ? reasons.length === 0 && !locked()
+      : false;
+  if (camp.dial_state === "running") {
+    return `<div class="row-actions workspace-actions">
+      <button class="btn" type="button" id="dial-pause" ${roAttr()}>Пауза</button>
+      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
+    </div>`;
+  }
+  if (camp.dial_state === "paused") {
+    return `<div class="row-actions workspace-actions">
+      <button class="btn" type="button" id="dial-resume" ${roAttr()}>Продолжить</button>
+      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
+    </div>`;
+  }
+  const disabled = !canStart || locked();
+  return `<button class="btn" type="button" id="dial-start" ${disabled ? "disabled" : ""}>Начать обзвон</button>
+    <p class="hint" id="dial-progress" hidden>Запускаем…</p>`;
+}
+
+function launchGatesHtml(camp) {
+  const reasons = launchBlockReasons(camp);
+  if (!reasons.length || !(camp.dial_state === "draft" || camp.dial_state === "stopped")) return "";
+  return `<div class="banner banner-warn" id="sec-launch-gates">
+    <strong>Нельзя начать обзвон</strong>
+    <ul>${reasons
+      .map((r) => {
+        let extra = "";
+        if (r.money) extra = ` <span class="hint">Пополнение делает поддержка CallMate</span>`;
+        if (r.action === "contacts")
+          extra += ` <a href="#sec-contacts" data-jump="sec-contacts">Загрузить файл</a>`;
+        if (r.action === "tel")
+          extra += ` <a href="#/cabinet/integrations">Телефония</a>`;
+        if (r.action === "schedule")
+          extra += ` <a href="#sec-schedule" data-jump="sec-schedule">Расписание</a>`;
+        if (r.weak) extra = ` <span class="hint">Допишите цель и сведения или поправьте текст</span>`;
+        return `<li>${escapeHtml(r.text)}${extra}</li>`;
+      })
+      .join("")}</ul>
+    <p class="hint">Пустое имя — не мешает запуску</p>
+  </div>`;
+}
+
+function campaignWorkspace(camp) {
+  const started = isStarted(camp);
+  const weak = isWeakScenario(camp);
+  return `<div class="workspace" data-camp="${escapeHtml(camp.id)}">
+    <header class="workspace-bar">
+      <a class="back-link" href="#/cabinet/campaigns">← К кампаниям</a>
+      <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
+      <span class="badge">${escapeHtml(dialLabel(camp.dial_state))}</span>
+      ${dialActionsHtml(camp)}
+    </header>
+    <div id="stop-confirm" class="panel nested" hidden>
+      <p>Остановить обзвон? Текущий разговор договорим</p>
+      <button class="btn" type="button" id="stop-yes">Стоп</button>
+      <button class="btn secondary" type="button" id="stop-no">Отмена</button>
+    </div>
+    ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
+    <p class="hint">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
+
+    <div class="workspace-grid">
+      ${blockGoalContext(camp)}
+      ${blockBotPreview(camp, weak, started)}
+    </div>
+    ${blockScenario(camp)}
+    <div class="workspace-grid">
+      ${blockSchedule(camp)}
+      <section class="flow-section" id="sec-telephony-summary">
+        <h2>Телефония для обзвона</h2>
+        <div class="panel wide">${telephonyStatusCompact()}</div>
+      </section>
+    </div>
+    ${blockNumbers(camp)}
+    <section class="flow-section" id="sec-analytics">
+      <h2>Итоги / аналитика кампании</h2>
+      <div class="panel wide">${blockCampaignAnalytics(camp)}</div>
+    </section>
+    <section class="flow-section" id="sec-launch">
+      <h2>Блоки запуска</h2>
+      <div class="panel wide">
+        ${launchGatesHtml(camp) || `<p class="hint">Ограничений нет — можно запускать из шапки</p>`}
+        ${
+          camp.dial_state === "running"
+            ? `<p class="hint">Текущий разговор закончим. Новые звонки не начнём</p><p class="hint">Обзвон уже идёт</p>`
+            : camp.dial_state === "paused"
+              ? `<p class="hint">Текущий разговор закончим. Новые звонки не начнём</p>`
+              : ""
+        }
+      </div>
+    </section>
+  </div>`;
+}
+
+function blockGoalContext(camp) {
+  const started = isStarted(camp);
+  const dis = started || locked() ? "disabled" : "";
+  return `<section class="flow-section" id="sec-goal">
+    <h2>Цель и контекст</h2>
+    <form class="panel wide" id="goal-form">
+      ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
+      <label>Название</label>
+      <input id="camp-name-edit" value="${escapeHtml(camp.name || "")}" ${dis} />
+      <p class="hint">Пустое имя — не мешает запуску</p>
+      <label>Цель звонка</label>
+      <input id="camp-goal-edit" value="${escapeHtml(camp.goal || "")}" placeholder="Например: напомнить о записи" ${dis} />
+      <p class="hint">К чему должен привести разговор</p>
+      <label>Сведения</label>
+      <textarea id="camp-details-edit" rows="4" placeholder="Что важно сказать абоненту" ${dis}>${escapeHtml(camp.details || "")}</textarea>
+      <p class="hint">Что роботу знать о продукте и ситуации</p>
+      <div class="error" id="goal-error" hidden></div>
+      <p class="hint ok-line" id="goal-ok" hidden>Сохранено</p>
+      ${started ? "" : `<button class="btn" type="submit" ${dis}>Сохранить</button>`}
+      ${(() => {
+        const verdicts = ensureVerdicts(camp);
+        return `<section style="margin-top:1.25rem">
+          <h3>Возможные итоги разговора</h3>
+          <p class="hint">Система собрала список по цели. Менять его нельзя</p>
+          ${
+            verdicts.length
+              ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(v)}</li>`).join("")}</ul>`
+              : `<p class="hint">Пока нет итогов — уточните цель и соберите сценарий снова</p>`
+          }
+        </section>`;
+      })()}
+    </form>
+  </section>`;
+}
+
+function blockBotPreview(camp, weak, started) {
+  const preview = buildPreview(camp);
+  return `<section class="flow-section" id="sec-preview">
+    <h2>Как говорит бот</h2>
+    <div class="panel wide">
+      ${
+        weak && !started
+          ? `<div class="banner banner-warn">
+          <strong>Сценарий пока слишком слабый для обзвона</strong>
+          <p class="hint">Допишите цель и сведения или поправьте текст</p>
+        </div>`
+          : ""
+      }
+      <h3>Робот так понял сценарий</h3>
+      ${
+        !camp.goal
+          ? `<p class="hint">Сначала сохраните цель и сведения</p>`
+          : `<div class="preview-grid">
+            <div><h4>Приветствие</h4><p>${escapeHtml(preview.greeting)}</p>
+              <p class="hint">Нет имени — в приветствии обойдёмся без обращения</p>
+              <p class="hint">Если имени нет — робот его не говорит</p>
+              <p class="hint">Пример: Здравствуйте!</p></div>
+            <div><h4>Что говорит</h4><p>${escapeHtml(preview.says)}</p></div>
+            <div><h4>Как отвечает</h4><p>${escapeHtml(preview.replies)}</p></div>
+            <div><h4>Тон</h4><p>${escapeHtml(preview.tone)}</p>
+              <p class="hint">Спокойно и по делу, без давления оформить любой ценой</p></div>
+          </div>`
+      }
+    </div>
+  </section>`;
+}
+
+function blockScenario(camp) {
+  return sectionScenario(camp);
+}
+
+function blockSchedule(camp) {
+  return sectionSchedule(camp);
+}
+
+function blockNumbers(camp) {
+  return sectionContacts(camp);
+}
+
+function newCampaignFormInline() {
+  return `<form class="panel nested" id="new-campaign-form">
+    <h3>Новая кампания</h3>
+    <label>Название</label><input id="camp-name" ${roAttr()} />
+    <p class="hint">Пустое имя — не мешает запуску</p>
+    <label>Цель звонка</label>
+    <input id="camp-goal" placeholder="Например: напомнить о записи" ${roAttr()} />
+    <p class="hint">К чему должен привести разговор</p>
+    <label>Сведения</label>
+    <textarea id="camp-details" rows="4" placeholder="Что важно сказать абоненту" ${roAttr()}></textarea>
+    <p class="hint">Что роботу знать о продукте и ситуации</p>
+    <div class="error" id="camp-error" hidden></div>
+    <div class="row-actions">
+      <button class="btn" type="submit" ${roAttr()}>Сохранить</button>
+      <a class="btn secondary" href="#/cabinet/campaigns" id="cancel-new-campaign" style="display:inline-block">Отмена</a>
+    </div>
+  </form>`;
 }
 
 function linesField(value, { standalone = true } = {}) {
@@ -597,135 +971,13 @@ function sectionTelephony() {
   const expand =
     panel === "sip" ? sipFormInline() : panel === "mango" ? mangoFormInline() : "";
   return `<section class="flow-section" id="sec-telephony">
-    <h2>Телефония</h2>
+    <h2>Интеграции</h2>
     <div class="panel wide">${body}${expand}</div>
   </section>`;
 }
 
-function newCampaignFormInline() {
-  return `<form class="panel nested" id="new-campaign-form">
-    <h3>Новая кампания</h3>
-    <label>Название</label><input id="camp-name" ${roAttr()} />
-    <p class="hint">Пустое имя — не мешает запуску</p>
-    <label>Цель звонка</label>
-    <input id="camp-goal" placeholder="Например: напомнить о записи" ${roAttr()} />
-    <p class="hint">К чему должен привести разговор</p>
-    <label>Сведения</label>
-    <textarea id="camp-details" rows="4" placeholder="Что важно сказать абоненту" ${roAttr()}></textarea>
-    <p class="hint">Что роботу знать о продукте и ситуации</p>
-    <div class="error" id="camp-error" hidden></div>
-    <div class="row-actions">
-      <button class="btn" type="submit" ${roAttr()}>Сохранить</button>
-      <button class="btn secondary" type="button" id="cancel-new-campaign">Отмена</button>
-    </div>
-  </form>`;
-}
-
-function sectionCampaign(camp) {
-  if (!state.campaigns.length || state.ui.showNewCampaign) {
-    const create = locked()
-      ? `<button class="btn" type="button" disabled>Создать кампанию</button>
-         <p class="hint">Аккаунт заблокирован</p>`
-      : state.ui.showNewCampaign || !state.campaigns.length
-        ? newCampaignFormInline()
-        : "";
-    const emptyHint = !state.campaigns.length
-      ? `<p>Создайте первую кампанию</p>`
-      : "";
-    const showCreateBtn =
-      state.campaigns.length && !state.ui.showNewCampaign && !locked()
-        ? `<button class="btn" type="button" id="show-new-campaign">Создать кампанию</button>`
-        : "";
-    if (!state.campaigns.length) {
-      return `<section class="flow-section" id="sec-campaign">
-        <h2>Кампания</h2>
-        <div class="panel wide">${emptyHint}${create}</div>
-      </section>`;
-    }
-  }
-
-  const options = state.campaigns
-    .map(
-      (c) =>
-        `<option value="${escapeHtml(c.id)}" ${String(c.id) === String(camp?.id) ? "selected" : ""}>${escapeHtml(c.name || "Без названия")} · ${dialLabel(c.dial_state)}</option>`
-    )
-    .join("");
-
-  const started = camp && isStarted(camp);
-  const weak = camp && isWeakScenario(camp);
-  const verdicts = camp ? ensureVerdicts(camp) : [];
-
-  return `<section class="flow-section" id="sec-campaign">
-    <h2>Кампания</h2>
-    <div class="panel wide">
-      <label>Активная кампания</label>
-      <select id="active-campaign-select">${options}</select>
-      <div class="row-actions">
-        ${
-          locked()
-            ? `<button class="btn" type="button" disabled>Создать кампанию</button>`
-            : `<button class="btn secondary" type="button" id="show-new-campaign">Создать кампанию</button>`
-        }
-      </div>
-      ${state.ui.showNewCampaign && !locked() ? newCampaignFormInline() : ""}
-      ${
-        camp
-          ? `<h3 style="margin-top:1rem">${escapeHtml(camp.name || "Без названия")}</h3>
-        <p>Состояние: ${dialLabel(camp.dial_state)}</p>
-        <p>Цель: ${escapeHtml(camp.goal || "—")}</p>
-        ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
-        ${
-          weak && !started
-            ? `<div class="banner banner-warn">
-          <strong>Сценарий пока слишком слабый для обзвона</strong>
-          <p class="hint">Допишите цель и сведения или поправьте текст</p>
-        </div>`
-            : ""
-        }
-        <section class="preview-blocks" style="margin-top:1rem">
-          <h3>Робот так понял сценарий</h3>
-          ${
-            !camp.goal
-              ? `<p class="hint">Сначала сохраните цель и сведения</p>`
-              : (() => {
-                  const preview = buildPreview(camp);
-                  return `<div class="preview-grid">
-            <div><h4>Приветствие</h4><p>${escapeHtml(preview.greeting)}</p>
-              <p class="hint">Нет имени — в приветствии обойдёмся без обращения</p>
-              <p class="hint">Если имени нет — робот его не говорит</p>
-              <p class="hint">Пример: Здравствуйте!</p></div>
-            <div><h4>Что говорит</h4><p>${escapeHtml(preview.says)}</p></div>
-            <div><h4>Как отвечает</h4><p>${escapeHtml(preview.replies)}</p></div>
-            <div><h4>Тон</h4><p>${escapeHtml(preview.tone)}</p>
-              <p class="hint">Спокойно и по делу, без давления оформить любой ценой</p></div>
-          </div>`;
-                })()
-          }
-        </section>
-        <section style="margin-top:1.25rem">
-          <h3>Возможные итоги разговора</h3>
-          <p class="hint">Система собрала список по цели. Менять его нельзя</p>
-          ${
-            verdicts.length
-              ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(v)}</li>`).join("")}</ul>`
-              : `<p class="hint">Пока нет итогов — уточните цель и соберите сценарий снова</p>`
-          }
-        </section>`
-          : ""
-      }
-    </div>
-  </section>`;
-}
-
-function needCampPanel(title, id) {
-  return `<section class="flow-section" id="${id}">
-    <h2>${title}</h2>
-    <div class="panel wide"><p class="hint">Сначала создайте кампанию выше</p></div>
-  </section>`;
-}
-
 function sectionScenario(camp) {
-  if (!camp) return needCampPanel("Сценарий", "sec-scenario");
+  if (!camp) return "";
   const started = isStarted(camp);
   const dis = started || locked() ? "disabled" : "";
   const stages =
@@ -736,7 +988,7 @@ function sectionScenario(camp) {
         : [];
   const attrs = camp.columns || [];
   return `<section class="flow-section" id="sec-scenario">
-    <h2>Сценарий</h2>
+    <h2>Сценарий и этапы</h2>
     <div class="panel wide">
       ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
       <p class="hint">Можно править текст; ветки диалога рисовать не нужно</p>
@@ -780,7 +1032,7 @@ function sectionScenario(camp) {
       ${
         started
           ? `<p class="hint">После старта менять нельзя</p>
-        <button class="btn" type="button" id="show-new-campaign-from-scenario">Создать кампанию</button>`
+        <a class="btn" href="#/cabinet/campaigns/new" style="display:inline-block">Создать кампанию</a>`
           : ""
       }
     </div>
@@ -788,7 +1040,7 @@ function sectionScenario(camp) {
 }
 
 function sectionContacts(camp) {
-  if (!camp) return needCampPanel("Контакты", "sec-contacts");
+  if (!camp) return "";
   const started = isStarted(camp);
   const contacts = camp.contacts || [];
   const warnings = camp.uploadWarnings || [];
@@ -806,19 +1058,22 @@ function sectionContacts(camp) {
         <table class="data" id="contacts-table">
           <thead><tr><th></th><th>Телефон</th><th>Статус</th><th>Имя</th></tr></thead>
           <tbody>${contacts
-            .map(
-              (r) => `<tr>
+            .map((r) => {
+              const key = `${camp.id}|${r.phone}`;
+              const open = state.ui.statusExpandKey === key;
+              return `<tr>
               <td><input type="checkbox" class="contact-check" data-phone="${escapeHtml(r.phone)}" ${roAttr()} /></td>
-              <td><button type="button" class="linkish" data-jump="sec-statuses" data-expand-status="${escapeHtml(camp.id)}|${escapeHtml(r.phone)}">${escapeHtml(maskPhone(r.phone))}</button></td>
+              <td><button type="button" class="linkish" data-expand-status="${escapeHtml(key)}">${escapeHtml(maskPhone(r.phone))}</button></td>
               <td>${escapeHtml(statusLabel(r.status))}</td>
               <td>${escapeHtml(r.name || "")}</td>
-            </tr>`
-            )
+            </tr>
+            ${open ? `<tr class="expand-row"><td colspan="4">${contactDrawerHtml(camp, r)}</td></tr>` : ""}`;
+            })
             .join("")}</tbody>
         </table>`;
 
   return `<section class="flow-section" id="sec-contacts">
-    <h2>Контакты</h2>
+    <h2>Номера</h2>
     <div class="panel wide">
       ${reloadHint}
       <div class="upload-zone" id="upload-zone">
@@ -850,12 +1105,7 @@ function sectionContacts(camp) {
 }
 
 function sectionSchedule(camp) {
-  if (!camp) {
-    return `<section class="flow-section" id="sec-schedule">
-      <h2>Расписание и перезвоны</h2>
-      <div class="panel wide"><p class="hint">Сначала создайте кампанию выше</p></div>
-    </section>`;
-  }
+  if (!camp) return "";
   const started = isStarted(camp);
   const dis = started || locked() ? "disabled" : "";
   const sch = camp.schedule || { days: [], from: "10:00", to: "18:00", tz: "Europe/Moscow" };
@@ -864,7 +1114,7 @@ function sectionSchedule(camp) {
       `<label class="inline"><input type="checkbox" name="day" value="${d.id}" ${sch.days?.includes(d.id) ? "checked" : ""} ${dis} /> ${d.label}</label>`
   ).join(" ");
   return `<section class="flow-section" id="sec-schedule">
-    <h2>Расписание и перезвоны</h2>
+    <h2>Когда звоним</h2>
     <form class="panel wide" id="schedule-form">
       ${started ? `<div class="banner banner-warn">После старта менять нельзя</div>` : ""}
       <h3>Дни звонков</h3>
@@ -905,69 +1155,6 @@ function launchBlockReasons(camp) {
   return reasons;
 }
 
-function sectionLaunch(camp) {
-  if (!camp) return needCampPanel("Запуск", "sec-launch");
-  const reasons = launchBlockReasons(camp);
-  const canStart =
-    camp.dial_state === "draft" || camp.dial_state === "stopped"
-      ? reasons.length === 0 && !locked()
-      : false;
-  let controls = "";
-  if (camp.dial_state === "running") {
-    controls = `<div class="row-actions">
-      <button class="btn" type="button" id="dial-pause" ${roAttr()}>Пауза</button>
-      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
-    </div>
-    <p class="hint">Текущий разговор закончим. Новые звонки не начнём</p>
-    <p class="hint">Обзвон уже идёт</p>`;
-  } else if (camp.dial_state === "paused") {
-    controls = `<div class="row-actions">
-      <button class="btn" type="button" id="dial-resume" ${roAttr()}>Продолжить</button>
-      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
-    </div>
-    <p class="hint">Текущий разговор закончим. Новые звонки не начнём</p>`;
-  } else {
-    const disabled = !canStart || locked();
-    controls = `<button class="btn" type="button" id="dial-start" ${disabled ? "disabled" : ""}>Начать обзвон</button>
-      ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
-      <p class="hint" id="dial-progress" hidden>Запускаем…</p>`;
-  }
-  const reasonList =
-    reasons.length && (camp.dial_state === "draft" || camp.dial_state === "stopped")
-      ? `<div class="banner banner-warn">
-          <strong>Нельзя начать обзвон</strong>
-          <ul>${reasons
-            .map((r) => {
-              let extra = "";
-              if (r.money) extra = ` <span class="hint">Пополнение делает поддержка CallMate</span>`;
-              if (r.action === "contacts")
-                extra += ` <a href="#/cabinet" data-jump="sec-contacts">Загрузить файл</a>`;
-              if (r.action === "tel") extra += ` <a href="#/cabinet" data-jump="sec-telephony">Телефония</a>`;
-              if (r.action === "schedule")
-                extra += ` <a href="#/cabinet" data-jump="sec-schedule">Расписание</a>`;
-              if (r.weak) extra = ` <span class="hint">Допишите цель и сведения или поправьте текст</span>`;
-              return `<li>${escapeHtml(r.text)}${extra}</li>`;
-            })
-            .join("")}</ul>
-          <p class="hint">Пустое имя — не мешает запуску</p>
-        </div>`
-      : "";
-  return `<section class="flow-section" id="sec-launch">
-    <h2>Запуск</h2>
-    <div class="panel wide" data-camp="${escapeHtml(camp.id)}">
-      <p>Состояние: ${dialLabel(camp.dial_state)}</p>
-      <p class="hint">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
-      ${reasonList}
-      ${controls}
-      <div id="stop-confirm" class="panel nested" hidden>
-        <p>Остановить обзвон? Текущий разговор договорим</p>
-        <button class="btn" type="button" id="stop-yes">Стоп</button>
-        <button class="btn secondary" type="button" id="stop-no">Отмена</button>
-      </div>
-    </div>
-  </section>`;
-}
-
 function contactDrawerHtml(camp, contact) {
   const attempts = contact.attempts || [];
   const attemptRows = attempts.length
@@ -1002,91 +1189,6 @@ function contactDrawerHtml(camp, contact) {
   </div>`;
 }
 
-function sectionStatuses(camp) {
-  if (!camp) return needCampPanel("Статусы", "sec-statuses");
-
-  const f = localStorage.getItem("cm_status_filter") || "all";
-  const q = (localStorage.getItem("cm_status_q") || "").trim();
-  const outcomeF = localStorage.getItem("cm_outcome_filter") || "all";
-
-  let list = (camp.contacts || []).map((ct) => ({
-    ...ct,
-    campaignId: camp.id,
-    campaignName: camp.name,
-  }));
-
-  if (!list.length) {
-    return `<section class="flow-section" id="sec-statuses">
-      <h2>Статусы</h2>
-      <div class="panel wide">
-        <p>Пока нет звонков</p>
-        <p class="hint">Когда начнёте обзвон, здесь появятся номера и статусы</p>
-        <a class="btn" href="#/cabinet" data-jump="sec-campaign" style="display:inline-block">К кампании</a>
-      </div>
-    </section>`;
-  }
-
-  if (f !== "all") list = list.filter((r) => r.status === f);
-  if (q) list = list.filter((r) => String(r.phone).includes(q.replace(/\D/g, "")) || String(r.phone).includes(q));
-  if (outcomeF !== "all") {
-    list = list.filter((r) => (r.attempts || []).some((a) => a.outcome === outcomeF));
-  }
-
-  const filters = [
-    ["all", "Все"],
-    [STATUS.in_progress, "В процессе"],
-    [STATUS.done, "Завершённые темы"],
-    [STATUS.no_answer, "Недозвон"],
-    [STATUS.cancel, "Отмена"],
-  ];
-
-  return `<section class="flow-section" id="sec-statuses">
-    <h2>Статусы</h2>
-    <div class="panel wide">
-      <div class="filters">
-        <label>Телефон</label>
-        <input id="status-q" placeholder="Номер или часть номера" value="${escapeHtml(q)}" />
-        <p class="hint">Поиск по номеру</p>
-        <label>Статус</label>
-        <select id="status-filter">
-          ${filters.map(([v, l]) => `<option value="${v}" ${f === v ? "selected" : ""}>${l}</option>`).join("")}
-        </select>
-        <label>Исход попытки</label>
-        <select id="outcome-filter">
-          <option value="all" ${outcomeF === "all" ? "selected" : ""}>Все</option>
-          <option value="busy" ${outcomeF === "busy" ? "selected" : ""}>Занято</option>
-          <option value="no_pickup" ${outcomeF === "no_pickup" ? "selected" : ""}>Не берёт</option>
-          <option value="voicemail" ${outcomeF === "voicemail" ? "selected" : ""}>Автоответчик</option>
-          <option value="early" ${outcomeF === "early" ? "selected" : ""}>Ранний сброс</option>
-          <option value="connected" ${outcomeF === "connected" ? "selected" : ""}>Дозвонились</option>
-        </select>
-        <button class="btn secondary" type="button" id="status-reset">Сбросить</button>
-      </div>
-      ${
-        list.length === 0
-          ? `<p>Ничего не нашли</p>`
-          : `<table class="data">
-        <thead><tr><th>Телефон</th><th>Статус</th><th>Имя</th></tr></thead>
-        <tbody>${list
-          .map((r) => {
-            const key = `${r.campaignId}|${r.phone}`;
-            const open = state.ui.statusExpandKey === key;
-            const contact = camp.contacts.find((c) => c.phone === r.phone);
-            return `<tr>
-            <td><button type="button" class="linkish" data-expand-status="${escapeHtml(key)}">${escapeHtml(maskPhone(r.phone))}</button></td>
-            <td><span class="badge">${escapeHtml(statusLabel(r.status))}</span></td>
-            <td>${escapeHtml(r.name || "")}</td>
-          </tr>
-          ${open && contact ? `<tr class="expand-row"><td colspan="3">${contactDrawerHtml(camp, contact)}</td></tr>` : ""}`;
-          })
-          .join("")}</tbody>
-      </table>`
-      }
-      <!-- FE-055: клиенту не показываем аварию обзвона -->
-    </div>
-  </section>`;
-}
-
 function outcomeLabel(code) {
   const map = {
     busy: "Занято",
@@ -1096,39 +1198,6 @@ function outcomeLabel(code) {
     connected: "Дозвонились",
   };
   return map[code] || code || "—";
-}
-
-function sectionAnalytics(camp) {
-  if (!camp || !camp.analytics) {
-    return `<section class="flow-section" id="sec-analytics">
-      <h2>Аналитика</h2>
-      <div class="panel wide">
-        <p>Пока нет данных по кампании</p>
-        <button class="btn secondary" type="button" disabled title="Пока нечего выгружать">Скачать Excel</button>
-        <p class="hint">Пока нечего выгружать</p>
-      </div>
-    </section>`;
-  }
-  const a = camp.analytics;
-  return `<section class="flow-section" id="sec-analytics">
-    <h2>Аналитика</h2>
-    <div class="panel wide">
-      <div>Звонков: ${escapeHtml(String(a.calls ?? 0))}</div>
-      <div>Средняя длительность: ${escapeHtml(a.avgDuration || "—")}</div>
-      <div><strong>До цели</strong>: ${escapeHtml(String(a.goalReached ?? 0))}</div>
-      <p class="hint">По итогам разговора относительно цели кампании</p>
-      <div><strong>Минуты разговора</strong>: ${escapeHtml(String(a.minutes ?? 0))}</div>
-      <div><strong>Ваш тариф за минуту</strong>: ${escapeHtml(String(state.companyTariff))}</div>
-      <div><strong>Стоимость кампании</strong>: ${escapeHtml(String(a.cost ?? a.minutes * state.companyTariff))}</div>
-      <p class="hint">Стоимость = минуты × ваш тариф</p>
-      <p class="hint">Минуты × тариф</p>
-      <div class="row-actions">
-        <button class="btn" type="button" id="export-excel">Скачать Excel</button>
-      </div>
-      <p class="hint" id="export-status" hidden></p>
-      <div class="error" id="export-error" hidden></div>
-    </div>
-  </section>`;
 }
 
 function maskPhone(phone) {
@@ -1190,25 +1259,26 @@ function render() {
   if (normalizeRoute(path)) return;
 
   const app = document.getElementById("app");
+  const canCabinet =
+    state.session && (state.role === "company" || (state.role === "superadmin" && state.impersonate));
 
-  if (path === "/cabinet") {
-    const canCabinet =
-      state.session && (state.role === "company" || (state.role === "superadmin" && state.impersonate));
+  const cabinet = parseCabinet(path);
+  if (cabinet) {
     if (!canCabinet) {
       navigate("/forbidden");
       return;
     }
-    app.innerHTML = cabinetShell();
+    app.innerHTML = cabinetShell(cabinet.tab, cabinetBody(cabinet));
     bindShell();
     clearFlashSoon();
     return;
   }
-  if (path === "/admin") {
+  if (path === "/admin" || path === "/admin/settings") {
     if (!state.session || state.role !== "superadmin") {
       navigate("/forbidden");
       return;
     }
-    app.innerHTML = adminShell();
+    app.innerHTML = adminShell(path === "/admin/settings" ? "settings" : "companies");
     bindShell();
     clearFlashSoon();
     return;
@@ -1225,7 +1295,7 @@ function render() {
 function bindForbidden() {
   document.getElementById("forbidden-action").onclick = () => {
     if (!state.session) navigate("/login");
-    else if (state.role === "company" || state.impersonate) navigate("/cabinet");
+    else if (state.role === "company" || state.impersonate) navigate("/cabinet/campaigns");
     else if (state.role === "superadmin") navigate("/admin");
     else navigate("/login");
   };
@@ -1410,7 +1480,7 @@ function bindAdminForms() {
       state.impersonate = { id: c.id, name: c.name };
       saveJson("cm_impersonate", state.impersonate);
       state.companyLocked = c.access_status === "locked";
-      navigate("/cabinet");
+      navigate("/cabinet/campaigns");
       render();
     };
   }
@@ -1470,36 +1540,29 @@ function bindAdminForms() {
 }
 
 function bindCampaignForms() {
-  const select = document.getElementById("active-campaign-select");
-  if (select) {
-    select.onchange = () => {
-      setActiveCampaignId(select.value);
-      state.ui.statusExpandKey = null;
-      state.ui.showNewCampaign = false;
-      render();
-    };
-  }
-
-  const showNew = document.getElementById("show-new-campaign");
-  if (showNew) {
-    showNew.onclick = () => {
-      state.ui.showNewCampaign = true;
-      render();
-      document.getElementById("sec-campaign")?.scrollIntoView({ behavior: "smooth" });
-    };
-  }
-  const showFromScenario = document.getElementById("show-new-campaign-from-scenario");
-  if (showFromScenario) {
-    showFromScenario.onclick = () => {
-      state.ui.showNewCampaign = true;
-      render();
-      document.getElementById("sec-campaign")?.scrollIntoView({ behavior: "smooth" });
-    };
-  }
-  const cancelNew = document.getElementById("cancel-new-campaign");
-  if (cancelNew) {
-    cancelNew.onclick = () => {
-      state.ui.showNewCampaign = false;
+  const goalForm = document.getElementById("goal-form");
+  if (goalForm) {
+    goalForm.onsubmit = (e) => {
+      e.preventDefault();
+      const camp = workspaceCampaign();
+      if (!camp || isStarted(camp) || locked()) return;
+      const goal = document.getElementById("camp-goal-edit").value.trim();
+      const err = document.getElementById("goal-error");
+      const ok = document.getElementById("goal-ok");
+      if (!goal) {
+        err.hidden = false;
+        err.textContent = "Опишите цель звонка";
+        ok.hidden = true;
+        return;
+      }
+      camp.name = document.getElementById("camp-name-edit").value.trim();
+      camp.goal = goal;
+      camp.details = document.getElementById("camp-details-edit").value;
+      camp.verdicts = ensureVerdicts(camp);
+      camp.preview = buildPreview(camp);
+      persistCampaigns();
+      err.hidden = true;
+      ok.hidden = false;
       render();
     };
   }
@@ -1537,14 +1600,13 @@ function bindCampaignForms() {
       setActiveCampaignId(camp.id);
       state.ui.showNewCampaign = false;
       flash("Кампания создана");
-      render();
-      document.getElementById("sec-scenario")?.scrollIntoView({ behavior: "smooth" });
+      navigate(`/cabinet/campaigns/${camp.id}`);
     };
   }
 
   const saveScenario = document.getElementById("save-scenario");
   if (saveScenario) {
-    const camp = activeCampaign();
+    const camp = workspaceCampaign() || activeCampaign();
     saveScenario.onclick = () => {
       if (!camp || isStarted(camp) || locked()) return;
       camp.scenarioText = document.getElementById("scenario-text").value;
@@ -1596,7 +1658,7 @@ function bindCampaignForms() {
   if (scheduleForm) {
     scheduleForm.onsubmit = (e) => {
       e.preventDefault();
-      const camp = activeCampaign();
+      const camp = workspaceCampaign() || activeCampaign();
       if (!camp || isStarted(camp) || locked()) return;
       const days = [...scheduleForm.querySelectorAll("input[name=day]:checked")].map((el) => el.value);
       const daysErr = document.getElementById("days-error");
@@ -1637,6 +1699,12 @@ function bindCampaignForms() {
       document.getElementById("sch-ok").hidden = false;
     };
   }
+}
+
+function workspaceCampaign() {
+  const parsed = parseCabinet(route());
+  if (parsed?.page === "workspace" && parsed.id) return campaignById(parsed.id);
+  return null;
 }
 
 function saveLinesFromForm() {
@@ -1763,7 +1831,7 @@ function bindContacts() {
     };
   }
 
-  const camp = activeCampaign();
+  const camp = workspaceCampaign() || activeCampaign();
 
   const cancelBtn = document.getElementById("cancel-contacts");
   if (cancelBtn && camp) {
@@ -1815,7 +1883,7 @@ function bindContacts() {
 
 function simulateUpload(file) {
   if (!file || locked()) return;
-  const camp = activeCampaign();
+  const camp = workspaceCampaign() || activeCampaign();
   if (!camp) return;
 
   const progress = document.getElementById("upload-progress");
@@ -1948,7 +2016,7 @@ function showReloadPrecheck(camp, incoming, brandNew) {
 }
 
 function bindLaunch() {
-  const camp = activeCampaign();
+  const camp = workspaceCampaign() || activeCampaign();
   if (!camp) return;
 
   const start = document.getElementById("dial-start");
@@ -2023,39 +2091,7 @@ function bindLaunch() {
 }
 
 function bindStatuses() {
-  const q = document.getElementById("status-q");
-  const f = document.getElementById("status-filter");
-  const outcome = document.getElementById("outcome-filter");
-  const reset = document.getElementById("status-reset");
-  if (q) {
-    q.onchange = () => {
-      localStorage.setItem("cm_status_q", q.value);
-      render();
-    };
-  }
-  if (f) {
-    f.onchange = () => {
-      localStorage.setItem("cm_status_filter", f.value);
-      render();
-    };
-  }
-  if (outcome) {
-    outcome.onchange = () => {
-      localStorage.setItem("cm_outcome_filter", outcome.value);
-      render();
-    };
-  }
-  if (reset) {
-    reset.onclick = () => {
-      localStorage.removeItem("cm_status_q");
-      localStorage.removeItem("cm_status_filter");
-      localStorage.removeItem("cm_outcome_filter");
-      render();
-    };
-  }
-
   document.querySelectorAll("[data-expand-status]").forEach((btn) => {
-    if (btn.hasAttribute("data-jump")) return;
     btn.onclick = () => {
       const key = btn.getAttribute("data-expand-status");
       state.ui.statusExpandKey = state.ui.statusExpandKey === key ? null : key;
@@ -2134,7 +2170,7 @@ function bindLogin() {
       localStorage.setItem("cm_session", data.session);
       localStorage.setItem("cm_role", data.role);
       localStorage.setItem("cm_locked", state.companyLocked ? "1" : "0");
-      navigate(data.role === "superadmin" ? "/admin" : "/cabinet");
+      navigate(data.role === "superadmin" ? "/admin" : "/cabinet/campaigns");
     } catch {
       document.getElementById("password").value = "";
       err.hidden = false;
