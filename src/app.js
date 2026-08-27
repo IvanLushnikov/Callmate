@@ -114,6 +114,7 @@ const state = {
     showNewCampaign: false,
     adminExpandedId: null,
     statusExpandKey: null,
+    scheduleDrawerOpen: false,
   },
 };
 
@@ -548,6 +549,7 @@ function ensureVerdicts(camp) {
 }
 
 function cabinetBody(parsed) {
+  if (parsed.page !== "workspace") state.ui.scheduleDrawerOpen = false;
   if (parsed.page === "integrations") return sectionTelephony();
   if (parsed.page === "analytics") return pageAnalytics();
   if (parsed.page === "account") return pageAccount();
@@ -570,8 +572,7 @@ function pageCampaignList() {
     : `<a class="btn" href="#/cabinet/campaigns/new" style="display:inline-block">Создать кампанию</a>`;
 
   if (!state.campaigns.length) {
-    return `<section class="flow-section" id="sec-campaign">
-      <h2>Кампании</h2>
+    return `<section class="campaigns-empty" id="sec-campaign">
       <div class="empty-state">
         <p>Создайте первую кампанию</p>
         ${createBtn}
@@ -695,19 +696,28 @@ function blockCampaignAnalytics(camp) {
     </div>`;
 }
 
-function telephonyStatusCompact() {
+function telephonyStatusLine() {
   const t = state.telephony;
-  let statusLine = "Телефония не подключена";
-  if (t.checking) statusLine = "Проверяем подключение…";
-  else if (t.status === "ok") statusLine = "Телефония подключена";
-  else if (t.status === "error") {
-    statusLine = ERROR_BY_CODE[t.lastError] || ERROR_BY_CODE.sip_unknown;
+  if (t.checking) return "Проверяем подключение…";
+  if (t.status === "ok") {
+    return t.lines != null
+      ? `Телефония подключена · линий: ${t.lines}`
+      : "Телефония подключена";
   }
-  const lines =
-    t.lines != null ? `<p class="hint">Линий: ${escapeHtml(String(t.lines))}</p>` : "";
-  return `<p><strong>${escapeHtml(statusLine)}</strong></p>
-    ${lines}
-    <a class="btn secondary" href="#/cabinet/integrations" style="display:inline-block">Настроить в Интеграциях</a>`;
+  if (t.status === "error") {
+    return ERROR_BY_CODE[t.lastError] || ERROR_BY_CODE.sip_unknown;
+  }
+  return "Телефония не подключена";
+}
+
+function telephonyStatusCompact() {
+  return `<div class="summary-row" id="sec-telephony-summary">
+    <div class="summary-row-body">
+      <h2>Телефония для обзвона</h2>
+      <p class="summary-line">${escapeHtml(telephonyStatusLine())}</p>
+    </div>
+    <a class="btn secondary" href="#/cabinet/integrations">Настроить в Интеграциях</a>
+  </div>`;
 }
 
 function dialActionsHtml(camp) {
@@ -778,7 +788,7 @@ function campaignWorkspace(camp) {
     ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
     <p class="hint meta-line">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</p>
 
-    <div class="workspace-grid workspace-grid-top">
+    <div class="workspace-primary">
       ${blockGoalContext(camp)}
       ${blockBotPreview(camp, weak, started)}
     </div>
@@ -787,12 +797,9 @@ function campaignWorkspace(camp) {
       ${blockScenario(camp)}
     </div>
 
-    <div class="workspace-grid">
+    <div class="workspace-summaries">
       ${blockSchedule(camp)}
-      <section class="flow-section" id="sec-telephony-summary">
-        <h2>Телефония для обзвона</h2>
-        <div class="panel wide">${telephonyStatusCompact()}</div>
-      </section>
+      <section class="flow-section summary-section">${telephonyStatusCompact()}</section>
     </div>
 
     <div class="workspace-block">
@@ -876,20 +883,20 @@ function blockBotPreview(camp, weak, started) {
       <div class="preview-edit-grid">
         <div class="preview-field">
           <label for="preview-greeting">Приветствие</label>
-          <textarea id="preview-greeting" rows="4" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
+          <textarea id="preview-greeting" rows="7" ${dis} placeholder="Здравствуйте!">${escapeHtml(camp.preview?.greeting || preview.greeting)}</textarea>
           <p class="hint">Если имени нет — робот его не говорит</p>
         </div>
         <div class="preview-field">
           <label for="preview-says">Что говорит</label>
-          <textarea id="preview-says" rows="4" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
+          <textarea id="preview-says" rows="7" ${dis} placeholder="Суть сообщения">${escapeHtml(camp.preview?.says || preview.says)}</textarea>
         </div>
         <div class="preview-field">
           <label for="preview-replies">Как отвечает</label>
-          <textarea id="preview-replies" rows="4" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
+          <textarea id="preview-replies" rows="7" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(camp.preview?.replies || preview.replies)}</textarea>
         </div>
         <div class="preview-field">
           <label for="preview-tone">Тон</label>
-          <textarea id="preview-tone" rows="4" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
+          <textarea id="preview-tone" rows="7" ${dis} placeholder="Спокойно и по делу">${escapeHtml(camp.preview?.tone || preview.tone)}</textarea>
           <p class="hint">Без давления оформить любой ценой</p>
         </div>
       </div>
@@ -1148,8 +1155,50 @@ function sectionContacts(camp) {
   </section>`;
 }
 
-function sectionSchedule(camp) {
-  if (!camp) return "";
+function formatDaysSummary(dayIds) {
+  const order = DAYS.map((d) => d.id);
+  const sorted = order.filter((id) => (dayIds || []).includes(id));
+  if (!sorted.length) return "Дни не заданы";
+  const indices = sorted.map((id) => order.indexOf(id));
+  const ranges = [];
+  let start = indices[0];
+  let prev = indices[0];
+  for (let i = 1; i <= indices.length; i++) {
+    if (i < indices.length && indices[i] === prev + 1) {
+      prev = indices[i];
+      continue;
+    }
+    const a = DAYS[start].label;
+    const b = DAYS[prev].label;
+    ranges.push(start === prev ? a : `${a}–${b}`);
+    if (i < indices.length) {
+      start = indices[i];
+      prev = indices[i];
+    }
+  }
+  return ranges.join(", ");
+}
+
+function retriesLabel(n) {
+  const abs = Math.abs(Number(n)) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return "перезвонов";
+  if (last === 1) return "перезвон";
+  if (last >= 2 && last <= 4) return "перезвона";
+  return "перезвонов";
+}
+
+function scheduleSummaryLine(camp) {
+  const sch = camp.schedule || { days: [], from: "10:00", to: "18:00", tz: "Europe/Moscow" };
+  const days = formatDaysSummary(sch.days);
+  const from = sch.from || "10:00";
+  const to = sch.to || "18:00";
+  const tz = sch.tz || "Europe/Moscow";
+  const retries = camp.retries ?? 2;
+  return `${days} · ${from}–${to} · ${tz} · ${retries} ${retriesLabel(retries)}`;
+}
+
+function scheduleFormFields(camp) {
   const started = isStarted(camp);
   const dis = started || locked() ? "disabled" : "";
   const sch = camp.schedule || { days: [], from: "10:00", to: "18:00", tz: "Europe/Moscow" };
@@ -1157,31 +1206,57 @@ function sectionSchedule(camp) {
     (d) =>
       `<label class="inline"><input type="checkbox" name="day" value="${d.id}" ${sch.days?.includes(d.id) ? "checked" : ""} ${dis} /> ${d.label}</label>`
   ).join(" ");
-  return `<section class="flow-section" id="sec-schedule">
-    <h2>Когда звоним</h2>
-    <form class="panel wide" id="schedule-form">
-      ${started ? `<div class="banner banner-warn">После старта менять нельзя</div>` : ""}
-      <h3>Дни звонков</h3>
-      <div class="days">${dayChecks}</div>
-      <div class="error" id="days-error" hidden></div>
-      <h3>Время звонков</h3>
-      <label>С</label><input id="sch-from" type="time" value="${escapeHtml(sch.from || "10:00")}" ${dis} />
-      <label>До</label><input id="sch-to" type="time" value="${escapeHtml(sch.to || "18:00")}" ${dis} />
-      <div class="error" id="time-error" hidden></div>
-      <label>Часовой пояс</label>
-      <select id="sch-tz" ${dis}>
-        ${TIMEZONES.map((tz) => `<option value="${tz}" ${sch.tz === tz ? "selected" : ""}>${tz}</option>`).join("")}
-      </select>
-      <p class="hint">Дни и время считаем в этом поясе</p>
-      <div class="error" id="tz-error" hidden></div>
-      <label>Перезвоны при недозвоне</label>
-      <input id="sch-retries" type="number" min="0" max="4" value="${escapeHtml(String(camp.retries ?? 2))}" ${dis} />
-      <p class="hint">Не больше 4</p>
-      <div class="error" id="retries-error" hidden></div>
-      <p class="hint ok-line" id="sch-ok" hidden>Сохранено</p>
+  return `${started ? `<div class="banner banner-warn">После старта менять нельзя</div>` : ""}
+    <h3>Дни звонков</h3>
+    <div class="days">${dayChecks}</div>
+    <div class="error" id="days-error" hidden></div>
+    <h3>Время звонков</h3>
+    <label>С</label><input id="sch-from" type="time" value="${escapeHtml(sch.from || "10:00")}" ${dis} />
+    <label>До</label><input id="sch-to" type="time" value="${escapeHtml(sch.to || "18:00")}" ${dis} />
+    <div class="error" id="time-error" hidden></div>
+    <label>Часовой пояс</label>
+    <select id="sch-tz" ${dis}>
+      ${TIMEZONES.map((tz) => `<option value="${tz}" ${sch.tz === tz ? "selected" : ""}>${tz}</option>`).join("")}
+    </select>
+    <p class="hint">Дни и время считаем в этом поясе</p>
+    <div class="error" id="tz-error" hidden></div>
+    <label>Перезвоны при недозвоне</label>
+    <input id="sch-retries" type="number" min="0" max="4" value="${escapeHtml(String(camp.retries ?? 2))}" ${dis} />
+    <p class="hint">Не больше 4</p>
+    <div class="error" id="retries-error" hidden></div>
+    <p class="hint ok-line" id="sch-ok" hidden>Сохранено</p>
+    <div class="row-actions">
       <button class="btn" type="submit" ${dis}>Сохранить</button>
-    </form>
-  </section>`;
+      <button class="btn secondary" type="button" id="schedule-done">Готово</button>
+    </div>`;
+}
+
+function sectionSchedule(camp) {
+  if (!camp) return "";
+  const open = !!state.ui.scheduleDrawerOpen;
+  return `<section class="flow-section summary-section" id="sec-schedule">
+    <div class="summary-row">
+      <div class="summary-row-body">
+        <h2>Когда звоним</h2>
+        <p class="summary-line">${escapeHtml(scheduleSummaryLine(camp))}</p>
+      </div>
+      <button class="btn secondary" type="button" id="schedule-open">Настроить</button>
+    </div>
+  </section>
+  ${
+    open
+      ? `<div class="drawer-backdrop" id="schedule-drawer-backdrop"></div>
+    <aside class="drawer" id="schedule-drawer" role="dialog" aria-labelledby="schedule-drawer-title">
+      <header class="drawer-head">
+        <h2 id="schedule-drawer-title">Когда звоним</h2>
+        <button class="btn ghost" type="button" id="schedule-close" aria-label="Закрыть">×</button>
+      </header>
+      <form class="drawer-body" id="schedule-form">
+        ${scheduleFormFields(camp)}
+      </form>
+    </aside>`
+      : ""
+  }`;
 }
 
 function launchBlockReasons(camp) {
@@ -1361,6 +1436,14 @@ function bindJumpNav() {
         render();
         requestAnimationFrame(() => {
           document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        return;
+      }
+      if (id === "sec-schedule") {
+        state.ui.scheduleDrawerOpen = true;
+        render();
+        requestAnimationFrame(() => {
+          document.getElementById("sec-schedule")?.scrollIntoView({ behavior: "smooth", block: "start" });
         });
         return;
       }
@@ -1763,9 +1846,29 @@ function bindCampaignForms() {
       camp.schedule = { days, from, to, tz };
       camp.retries = retries;
       persistCampaigns();
-      document.getElementById("sch-ok").hidden = false;
+      state.ui.scheduleDrawerOpen = false;
+      flash("Сохранено");
+      render();
     };
   }
+
+  const openSchedule = document.getElementById("schedule-open");
+  if (openSchedule) {
+    openSchedule.onclick = () => {
+      state.ui.scheduleDrawerOpen = true;
+      render();
+    };
+  }
+  const closeSchedule = () => {
+    state.ui.scheduleDrawerOpen = false;
+    render();
+  };
+  const scheduleClose = document.getElementById("schedule-close");
+  if (scheduleClose) scheduleClose.onclick = closeSchedule;
+  const scheduleDone = document.getElementById("schedule-done");
+  if (scheduleDone) scheduleDone.onclick = closeSchedule;
+  const scheduleBackdrop = document.getElementById("schedule-drawer-backdrop");
+  if (scheduleBackdrop) scheduleBackdrop.onclick = closeSchedule;
 }
 
 function workspaceCampaign() {
