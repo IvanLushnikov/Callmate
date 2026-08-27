@@ -9,19 +9,30 @@
   --surface-2: #f4f6f9;
   --accent: #2557ff;
   --accent-ink: #ffffff;
-  --danger: #c62828;
   --ok: #0f7a4c;
+  --ok-soft: #e8f6ef;
+  --warn: #9a6700;
+  --warn-soft: #fff8e8;
+  --danger: #c62828;
+  --danger-soft: #fdecec;
   --glow: rgba(37, 87, 255, 0.08);
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 12px 32px rgba(16, 24, 40, 0.05);
   --radius: 16px;
   --radius-sm: 12px;
   --page: 1120px;
-  --s1: 0.35rem;
-  --s2: 0.7rem;
-  --s3: 1.05rem;
-  --s4: 1.5rem;
-  --s5: 2.1rem;
-  --s6: 2.75rem;
+  /* VIS-200 spacing scale (4px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --s1: var(--space-1);
+  --s2: var(--space-2);
+  --s3: var(--space-3);
+  --s4: var(--space-4);
+  --s5: var(--space-5);
+  --s6: var(--space-6);
   --control-h: 2.75rem;
   --font: "Manrope", system-ui, sans-serif;
   --display: "Syne", "Manrope", sans-serif;
@@ -37,9 +48,13 @@
   --surface-2: #1a2338;
   --accent: #6b8cff;
   --accent-ink: #071018;
-  --danger: #ff7b7b;
   --ok: #4ade9b;
-  --glow: rgba(107, 140, 255, 0.22);
+  --ok-soft: rgba(74, 222, 155, 0.12);
+  --warn: #f5c518;
+  --warn-soft: rgba(245, 197, 24, 0.12);
+  --danger: #ff7b7b;
+  --danger-soft: rgba(255, 123, 123, 0.12);
+  --glow: rgba(107, 140, 255, 0.14);
   --shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
 }
 
@@ -431,7 +446,8 @@ form.panel > .btn,
   margin-top: var(--s3);
   box-shadow: none;
   background: var(--surface-2);
-  padding: var(--s3);
+  border-radius: var(--radius-sm);
+  padding: var(--s4);
 }
 
 .panel.compact {
@@ -477,9 +493,17 @@ form.panel > .btn,
   margin-bottom: var(--s3);
   background: var(--surface);
 }
-.banner-danger { border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
-.banner-warn { border-color: color-mix(in srgb, #d97706 45%, var(--line)); }
+.banner-danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  background: var(--danger-soft);
+}
+.banner-warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: var(--warn-soft);
+}
 .banner-info { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+
+.ok-line { color: var(--ok); font-weight: 600; }
 
 .back-link {
   display: inline-flex;
