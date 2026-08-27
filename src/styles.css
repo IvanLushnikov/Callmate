@@ -503,8 +503,6 @@ form.panel > .btn,
 }
 .banner-info { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 
-.ok-line { color: var(--ok); font-weight: 600; }
-
 .back-link {
   display: inline-flex;
   align-items: center;
