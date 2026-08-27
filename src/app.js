@@ -2068,7 +2068,9 @@ function render() {
             camp.analytics = {
               calls: summary.calls ?? summary.calls_total ?? 0,
               avgDuration: summary.avg_duration || summary.avgDuration || "—",
+              // BE-199: «до цели» из вердиктов/marks_goal_reached — не completed_topics
               goalReached: summary.goal_reached ?? summary.goalReached ?? 0,
+              completedTopics: summary.completed_topics ?? summary.completedTopics ?? 0,
               minutes: summary.minutes ?? summary.minutes_total ?? 0,
               cost: summary.cost_rub ?? summary.cost ?? 0,
             };
