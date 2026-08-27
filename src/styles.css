@@ -990,13 +990,6 @@ form.panel > .btn,
   width: 2rem;
 }
 
-.status-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin: 0 0 var(--s3);
-}
-
 .days {
   display: flex;
   flex-wrap: wrap;
