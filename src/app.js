@@ -51,8 +51,17 @@ const CABINET_TABS = [
   { id: "campaigns", label: "Кампании", href: "#/cabinet/campaigns" },
   { id: "integrations", label: "Интеграции", href: "#/cabinet/integrations" },
   { id: "analytics", label: "Аналитика", href: "#/cabinet/analytics" },
-  { id: "tariffs", label: "Тарифы", href: "#/cabinet/tariffs" },
-  { id: "account", label: "Аккаунт", href: "#/cabinet/account" },
+  { id: "tariffs", label: "Биллинг", href: "#/cabinet/tariffs" },
+  { id: "account", label: "Настройки", href: "#/cabinet/account" },
+];
+
+const WORKSPACE_TABS = [
+  { id: "overview", label: "Обзор" },
+  { id: "contacts", label: "Контакты" },
+  { id: "scenario", label: "Сценарий" },
+  { id: "calls", label: "Звонки" },
+  { id: "results", label: "Результаты" },
+  { id: "settings", label: "Настройки" },
 ];
 
 const ADMIN_TABS = [
@@ -134,6 +143,10 @@ const state = {
     pendingPreviewSave: null,
     contactSelectAll: false,
     contactsBulkConfirm: null,
+    workspaceTab: "overview",
+    mobileNavOpen: false,
+    consentOpen: false,
+    contactUploadPreview: null,
   },
   adminSettings: {
     batch_interval_sec: Number(localStorage.getItem("cm_interval") || "30"),
@@ -276,9 +289,189 @@ function activeCampaign() {
 
 function dialLabel(stateName) {
   if (stateName === "running") return "Идёт обзвон";
-  if (stateName === "stopped") return "Остановлен";
+  if (stateName === "stopped") return "Завершена";
   if (stateName === "paused") return "На паузе";
   return "Черновик";
+}
+
+function operationalStatus(camp) {
+  if (!camp) return { label: "—", tone: "muted", code: "unknown" };
+  if (camp.dial_state === "running") return { label: "Идёт обзвон", tone: "ok", code: "running" };
+  if (camp.dial_state === "paused") return { label: "На паузе", tone: "warn", code: "paused" };
+  if (camp.dial_state === "stopped") return { label: "Завершена", tone: "muted", code: "stopped" };
+  const reasons = launchBlockReasons(camp);
+  if (!reasons.length) return { label: "Готово к запуску", tone: "ok", code: "ready" };
+  return { label: "Нужны действия", tone: "warn", code: "needs_action" };
+}
+
+function statusBadgeHtml(camp, { compact = false } = {}) {
+  const st = operationalStatus(camp);
+  return `<span class="status-badge status-badge--${st.tone}${compact ? " status-badge--compact" : ""}" aria-label="Статус: ${escapeHtml(st.label)}">${escapeHtml(st.label)}</span>`;
+}
+
+function balanceChipHtml({ className = "" } = {}) {
+  const bal = Number(state.companyBalance) || 0;
+  const tariff = Number(state.companyTariff) || 0;
+  const approx = tariff > 0 ? Math.floor(bal / tariff) : null;
+  const hint = approx != null ? `≈ ${approx} мин` : "тариф не задан";
+  return `<a class="balance-chip${className ? ` ${className}` : ""}" href="#/cabinet/tariffs" title="Баланс и тариф">
+    <span class="balance-chip-value">${escapeHtml(String(bal))} ₽</span>
+    <span class="balance-chip-sep" aria-hidden="true">·</span>
+    <span class="balance-chip-tariff">${tariff > 0 ? `${escapeHtml(String(tariff))} ₽/мин` : "—"}</span>
+    <span class="balance-chip-hint">${escapeHtml(hint)}</span>
+  </a>`;
+}
+
+function goalIsFilled(camp) {
+  const goal = (camp?.goal || "").trim();
+  const details = (camp?.details || "").trim();
+  return Boolean(goal && details.length >= 8 && !isWeakScenario(camp));
+}
+
+function launchChecklist(camp) {
+  const telOk = state.telephony.status === "ok" && !state.telephony.checking;
+  const schOk = scheduleIsSet(camp);
+  const contactsOk = Boolean(camp?.contacts?.length);
+  const balanceOk = state.companyBalance > 0 || state.impersonate;
+  return [
+    {
+      id: "goal",
+      label: "Цель заполнена",
+      ok: goalIsFilled(camp),
+      action: goalIsFilled(camp) ? "" : "Дописать цель",
+      jump: "sec-context",
+    },
+    {
+      id: "contacts",
+      label: "Контакты загружены",
+      ok: contactsOk,
+      action: contactsOk ? "" : "Загрузить",
+      jump: "sec-contacts",
+    },
+    {
+      id: "telephony",
+      label: "Телефония подключена",
+      ok: telOk && schOk,
+      action: telOk ? (schOk ? "" : "Задать расписание") : "Настроить",
+      jump: telOk ? "sec-schedule" : "integrations",
+    },
+    {
+      id: "balance",
+      label: "На балансе достаточно средств",
+      ok: balanceOk,
+      action: balanceOk ? "" : "Пополнить",
+      jump: "tariffs",
+    },
+  ];
+}
+
+function readinessProgress(camp) {
+  const items = launchChecklist(camp);
+  const completed = items.filter((i) => i.ok).length;
+  return { completed, total: items.length, items };
+}
+
+function campaignNextStep(camp) {
+  const st = operationalStatus(camp);
+  if (st.code === "running") return { label: "Следите за ходом обзвона", tab: "calls" };
+  if (st.code === "paused") return { label: "Продолжить или остановить", tab: "overview" };
+  if (st.code === "stopped") return { label: "Посмотреть результаты", tab: "results" };
+  const item = launchChecklist(camp).find((i) => !i.ok);
+  if (!item) return { label: "Готова к запуску", tab: "overview" };
+  const map = {
+    goal: "Заполнить цель",
+    contacts: "Добавить контакты",
+    telephony: state.telephony.status === "ok" ? "Настроить расписание" : "Настроить телефонию",
+    balance: "Пополнить баланс",
+  };
+  return { label: map[item.id] || item.action || "Продолжить настройку", tab: item.jump === "integrations" ? "settings" : item.jump === "sec-contacts" ? "contacts" : "overview" };
+}
+
+function campaignsListStats() {
+  let active = 0;
+  let drafts = 0;
+  let needsAction = 0;
+  for (const c of state.campaigns) {
+    if (c.dial_state === "running" || c.dial_state === "paused") active += 1;
+    else if (c.dial_state === "draft") drafts += 1;
+    if (operationalStatus(c).code === "needs_action") needsAction += 1;
+  }
+  return { active, drafts, needsAction, total: state.campaigns.length };
+}
+
+function hasCampaignCalls(camp) {
+  if (!camp) return false;
+  if (camp.ever_started || camp.dial_state === "running" || camp.dial_state === "paused" || camp.dial_state === "stopped") return true;
+  const a = camp.analytics;
+  return Boolean(a && (a.calls || a.calls_total));
+}
+
+function contactPipelineStats(camp) {
+  const contacts = camp?.contacts || [];
+  const counts = contactCountsByStatus(contacts);
+  const inQueue = counts.in_progress;
+  const done = counts.done;
+  const noAnswer = counts.no_answer;
+  const cancel = counts.cancel;
+  const total = contacts.length;
+  const called = done + noAnswer + cancel;
+  return { total, inQueue, called, done, noAnswer, cancel, retry: noAnswer };
+}
+
+function telephonyOnboardingBlock() {
+  const t = state.telephony;
+  if (t.checking || t.status === "ok") return "";
+  return `<div class="onboard-block" role="region" aria-label="Подключение телефонии">
+    <div class="onboard-block-copy">
+      <p class="onboard-block-kicker">Первый шаг</p>
+      <h3 class="onboard-block-title">Подключите телефонию — без неё обзвон не запустится</h3>
+      <p class="onboard-block-lead">SIP или Манго Телеком. Займёт пару минут, зато кампании смогут звонить клиентам.</p>
+    </div>
+    <a class="btn onboard-block-cta" href="#/cabinet/integrations">Подключить телефонию</a>
+  </div>`;
+}
+
+function launchChecklistHtml(camp) {
+  const { completed, total, items } = readinessProgress(camp);
+  const rows = items
+    .map((item) => {
+      const jumpAttr =
+        item.jump === "integrations"
+          ? `href="#/cabinet/integrations"`
+          : item.jump === "tariffs"
+            ? `href="#/cabinet/tariffs"`
+            : item.jump === "sec-schedule"
+              ? `type="button" data-open-schedule="1"`
+              : item.jump
+                ? `type="button" data-jump="${escapeHtml(item.jump)}"`
+                : "";
+      const tag = item.jump && !item.ok ? (item.jump === "integrations" || item.jump === "tariffs" ? "a" : "button") : "div";
+      const action =
+        !item.ok && item.action
+          ? tag === "div"
+            ? `<span class="checklist-action">${escapeHtml(item.action)}</span>`
+            : `<span class="checklist-action">${escapeHtml(item.action)} →</span>`
+          : "";
+      const attrs =
+        tag === "a"
+          ? `class="checklist-row checklist-row--${item.ok ? "ok" : "warn"}" ${jumpAttr}`
+          : tag === "button"
+            ? `class="checklist-row checklist-row--${item.ok ? "ok" : "warn"}" ${jumpAttr}`
+            : `class="checklist-row checklist-row--${item.ok ? "ok" : "warn"}"`;
+      return `<${tag} ${attrs}>
+        <span class="checklist-icon" aria-hidden="true">${item.ok ? "✓" : "!"}</span>
+        <span class="checklist-label">${escapeHtml(item.label)}</span>
+        ${action}
+      </${tag}>`;
+    })
+    .join("");
+  return `<div class="launch-checklist" id="sec-launch-checklist">
+    <div class="launch-checklist-head">
+      <h3 class="launch-checklist-title">Что нужно для запуска</h3>
+      <span class="launch-checklist-progress">${completed} из ${total}</span>
+    </div>
+    <div class="checklist-rows">${rows}</div>
+  </div>`;
 }
 
 function statusLabel(code) {
@@ -338,12 +531,7 @@ function themeControls() {
 }
 
 function telephonyBanner() {
-  const t = state.telephony;
-  if (t.checking || t.status === "ok") return "";
-  return `<div class="banner banner-warn desk-banner">
-    <strong>Подключите телефонию, чтобы запускать обзвон</strong>
-    <p class="hint"><a href="#/cabinet/integrations">Перейти в интеграции</a></p>
-  </div>`;
+  return telephonyOnboardingBlock();
 }
 
 function lockedBanner() {
@@ -364,7 +552,7 @@ function impersonateBanner() {
 }
 
 function appTabsHtml(activeTab, tabs = CABINET_TABS) {
-  return `<nav class="app-tabs" aria-label="Разделы кабинета">
+  return `<nav class="app-tabs app-tabs-desk" aria-label="Разделы кабинета">
     ${tabs
       .map(
         (t) =>
@@ -374,14 +562,27 @@ function appTabsHtml(activeTab, tabs = CABINET_TABS) {
   </nav>`;
 }
 
+function mobileNavHtml(activeTab, tabs = CABINET_TABS) {
+  const opts = tabs
+    .map(
+      (t) =>
+        `<option value="${escapeHtml(t.href)}"${t.id === activeTab ? " selected" : ""}>${escapeHtml(t.label)}</option>`
+    )
+    .join("");
+  return `<label class="mobile-nav-label sr-only" for="mobile-nav-select">Раздел</label>
+    <select class="mobile-nav-select" id="mobile-nav-select" aria-label="Раздел кабинета">${opts}</select>`;
+}
+
 function cabinetShell(activeTab, bodyHtml) {
   return `<div class="page-shell page-shell-desk">
     <header class="page-topbar page-topbar-desk">
       <p class="brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
       ${appTabsHtml(activeTab)}
+      ${mobileNavHtml(activeTab)}
       <div class="page-topbar-actions">
+        ${balanceChipHtml({ className: "balance-chip--header" })}
         ${themeControls()}
-        <button class="btn secondary" id="logout" type="button">Выйти</button>
+        <button class="btn ghost page-logout" id="logout" type="button">Выйти</button>
       </div>
     </header>
     <main class="page page-desk">
@@ -826,6 +1027,7 @@ function cabinetBody(parsed) {
   if (parsed.page !== "workspace") {
     state.ui.scheduleDrawerOpen = false;
     state.ui.launchReasonsDrawerOpen = false;
+    state.ui.workspaceTab = "overview";
   }
   if (parsed.page === "integrations") return sectionTelephony();
   if (parsed.page === "analytics") return pageAnalytics();
@@ -857,38 +1059,68 @@ function pageCampaignList() {
   if (!state.campaigns.length) {
     return deskPage(
       "Кампании",
-      "",
-      `${telephonyBanner()}<div class="empty-state empty-state-hero desk-empty-hero">
+      "От цели до обзвона — в одном месте",
+      `${telephonyOnboardingBlock()}<div class="empty-state empty-state-hero desk-empty-hero">
         <div class="empty-state-mark" aria-hidden="true"></div>
         <h3 class="empty-state-title">Пока нет кампаний</h3>
-        <p class="empty-state-lead">Создайте первую — от цели до обзвона</p>
+        <p class="empty-state-lead">Создайте первую кампанию: задайте цель, загрузите контакты и запустите обзвон. Всё займёт меньше часа.</p>
         ${createBtn}
       </div>`,
-      { id: "sec-campaign", className: "desk-page-empty" }
+      { id: "sec-campaign", className: "desk-page-empty campaigns-list-page" }
     );
   }
 
+  const stats = campaignsListStats();
+  const statRow = `<div class="desk-stat-row desk-stat-row-3 campaigns-status-row">
+    ${deskStatCard("Активных", String(stats.active), "Идут или на паузе", { tone: stats.active ? "ok" : "" })}
+    ${deskStatCard("Черновиков", String(stats.drafts), "Ещё не запускали")}
+    ${deskStatCard("Нужны действия", String(stats.needsAction), "Без этого не запустить", { tone: stats.needsAction ? "warn" : "" })}
+  </div>`;
+
   const rows = state.campaigns
-    .map(
-      (c) => `<tr class="camp-row" data-href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">
+    .map((c) => {
+      const next = campaignNextStep(c);
+      const prog = contactPipelineStats(c);
+      const progressHint =
+        c.dial_state === "running" || c.dial_state === "paused"
+          ? `В очереди ${prog.inQueue} · дозвон ${prog.done}`
+          : `${(c.contacts || []).length} контактов`;
+      return `<tr class="camp-row" data-href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">
         <td><a class="camp-name" href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">${escapeHtml(c.name || "Без названия")}</a></td>
-        <td><span class="badge badge-quiet">${escapeHtml(dialLabel(c.dial_state))}</span></td>
+        <td>${statusBadgeHtml(c, { compact: true })}</td>
+        <td><span class="next-step-label">${escapeHtml(next.label)}</span></td>
+        <td class="camp-count">${escapeHtml(progressHint)}</td>
         <td class="camp-goal">${escapeHtml(c.goal || "—")}</td>
-        <td class="camp-count">${(c.contacts || []).length}</td>
-      </tr>`
-    )
+      </tr>`;
+    })
     .join("");
 
-  return `${deskPageHeadRow("Кампании", "От цели до обзвона в одном месте", createBtn, { id: "sec-campaign" })}
+  const cards = state.campaigns
+    .map((c) => {
+      const next = campaignNextStep(c);
+      return `<a class="camp-card" href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">
+        <div class="camp-card-head">
+          <strong class="camp-card-title">${escapeHtml(c.name || "Без названия")}</strong>
+          ${statusBadgeHtml(c, { compact: true })}
+        </div>
+        <p class="hint camp-card-next">${escapeHtml(next.label)}</p>
+        <p class="hint camp-card-meta">${(c.contacts || []).length} контактов</p>
+      </a>`;
+    })
+    .join("");
+
+  return `${deskPageHeadRow("Кампании", "От цели до обзвона — в одном месте", createBtn, { id: "sec-campaign" })}
     <div class="desk-page-body">
-      ${telephonyBanner()}
-    ${deskSurface(
-      `<table class="data data-camps">
-        <thead><tr><th>Название</th><th>Состояние</th><th>Цель</th><th>Номеров</th></tr></thead>
+      ${statRow}
+      ${telephonyOnboardingBlock()}
+      ${deskSurface(
+        `<table class="data data-camps camp-table-desk">
+        <thead><tr><th>Название</th><th>Статус</th><th>Следующий шаг</th><th>Прогресс</th><th>Цель</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`,
-      { className: "desk-table-surface" }
-    )}
+        { className: "desk-table-surface camp-table-wrap" }
+      )}
+      <div class="camp-cards-mobile">${cards}</div>
     </div>
   </section>`;
 }
@@ -926,32 +1158,27 @@ function pageAccount() {
     : "Кабинет компании";
   const lockedNote =
     state.companyLocked && !state.impersonate
-      ? `<div class="banner banner-danger desk-banner"><strong>Аккаунт заблокирован. Можно смотреть, менять и запускать нельзя</strong>
-         <p class="hint">Чтобы снять блокировку, напишите в поддержку CallMate</p></div>`
+      ? `<div class="banner banner-danger desk-banner"><strong>Аккаунт заблокирован</strong>
+         <p class="hint">Можно смотреть, менять и запускать нельзя. Напишите в поддержку CallMate.</p></div>`
       : "";
-  const body = `<div class="desk-stat-row">
-      ${deskStatCard("Кто вошёл", who)}
-      ${deskStatCard(
-        "Доступ",
-        state.companyLocked && !state.impersonate ? "Ограничен" : "Активен",
-        state.companyLocked && !state.impersonate ? "Только просмотр" : "",
-        { tone: state.companyLocked && !state.impersonate ? "warn" : "ok" }
-      )}
-    </div>
-    ${lockedNote}
-    <div class="desk-link-cards">
+  const body = `${lockedNote}
+    <div class="desk-link-cards account-links">
       <a class="desk-link-card" href="#/cabinet/tariffs">
-        <span class="desk-link-kicker">Баланс и тариф</span>
-        <strong class="desk-link-title">${escapeHtml(String(state.companyBalance))} ₽ · ${escapeHtml(String(state.companyTariff))} ₽/мин</strong>
-        <span class="hint">Открыть раздел «Тарифы»</span>
+        <span class="desk-link-kicker">Биллинг</span>
+        <strong class="desk-link-title">Баланс и тариф</strong>
+        <span class="hint">${escapeHtml(String(state.companyBalance))} ₽ · ${escapeHtml(String(state.companyTariff))} ₽/мин</span>
       </a>
-      <div class="desk-link-card desk-link-card-static">
-        <span class="desk-link-kicker">Оформление</span>
-        <strong class="desk-link-title">Светлая и тёмная тема</strong>
-        <span class="hint">Переключатель в шапке страницы</span>
-      </div>
+      <a class="desk-link-card" href="#/cabinet/integrations">
+        <span class="desk-link-kicker">Интеграции</span>
+        <strong class="desk-link-title">Телефония</strong>
+        <span class="hint">${escapeHtml(telephonyStatusLine())}</span>
+      </a>
+    </div>
+    <div class="desk-section-block account-meta">
+      <p class="hint"><strong>Кто вошёл:</strong> ${who}</p>
+      <p class="hint"><strong>Доступ:</strong> ${state.companyLocked && !state.impersonate ? "Ограничен (только просмотр)" : "Активен"}</p>
     </div>`;
-  return deskPage("Аккаунт", "Настройки входа и статус компании", body, { id: "sec-account" });
+  return deskPage("Настройки", "Биллинг, телефония и доступ", body, { id: "sec-account" });
 }
 
 const TARIFF_PACKAGES = [
@@ -967,10 +1194,10 @@ function pageTariffs() {
   const tariff = Number(state.companyTariff) || 0;
   const approx = tariff > 0 ? Math.floor(bal / tariff) : null;
   const rows = TARIFF_PACKAGES.map((p) => {
-    const yours = tariff > 0 && Number(tariff) === p.price ? ' <span class="badge badge-quiet">Ваш тариф</span>' : "";
-    return `<tr>
-      <td>${escapeHtml(String(p.minutes.toLocaleString("ru-RU")))} мин${yours}</td>
-      <td>${escapeHtml(String(p.price))} ₽</td>
+    const current = tariff > 0 && Number(tariff) === p.price;
+    return `<tr class="${current ? "tariff-row-current" : ""}">
+      <td>${escapeHtml(String(p.minutes.toLocaleString("ru-RU")))} мин${current ? ' <span class="status-badge status-badge--ok status-badge--compact">Текущий</span>' : ""}</td>
+      <td>${escapeHtml(String(p.price))} ₽/мин</td>
       <td>${escapeHtml(String(p.amount.toLocaleString("ru-RU")))} ₽</td>
     </tr>`;
   }).join("");
@@ -989,18 +1216,22 @@ function pageTariffs() {
     </div>
     <div class="desk-section-block">
       <h3 class="desk-block-title">Пакеты минут</h3>
-      <p class="hint desk-block-lead">Чем больше пакет, тем ниже цена минуты. Минимальный пакет — 1 000 минут.</p>
+      <p class="hint desk-block-lead">Чем больше пакет — тем ниже цена минуты. Минимальный пакет — 1 000 минут.</p>
       ${deskSurface(
-        `<table class="data">
+        `<table class="data tariff-table">
           <thead><tr><th>Пакет</th><th>Цена за минуту</th><th>Сумма</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>`,
         { className: "desk-table-surface" }
       )}
       <p class="hint">Считаем минуты состоявшегося разговора. Недозвон не тарифицируем.</p>
-      <p class="hint">Пополнить баланс может поддержка CallMate. В кабинете оплаты нет.</p>
+    </div>
+    <div class="billing-cta panel">
+      <h3 class="desk-block-title">Пополнение баланса</h3>
+      <p class="hint">В кабинете оплаты пока нет — пополнение через поддержку CallMate.</p>
+      <a class="btn" href="mailto:support@callmate.ru?subject=Пополнение%20баланса">Связаться для пополнения</a>
     </div>`;
-  return deskPage("Тарифы", "Баланс, тариф и пакеты минут", body, { id: "sec-tariffs" });
+  return deskPage("Биллинг", "Баланс, тариф и пакеты минут", body, { id: "sec-tariffs" });
 }
 
 async function refreshCabinetMe() {
@@ -1019,18 +1250,39 @@ async function refreshCabinetMe() {
 
 function pageAnalytics() {
   const camp = activeCampaign();
+  const hasAnyCalls = state.campaigns.some(hasCampaignCalls);
+
   const listMetrics = state.campaigns.length
     ? deskSurface(
-        `<table class="data">
-          <thead><tr><th>Кампания</th><th>Состояние</th><th>Звонков</th><th>До цели</th></tr></thead>
+        `<table class="data analytics-all-table">
+          <thead><tr><th>Кампания</th><th>Статус</th><th>Прогресс</th><th>Конверсия</th><th>Стоимость</th><th>Активность</th></tr></thead>
           <tbody>${state.campaigns
             .map((c) => {
               const a = c.analytics;
+              const calls = a?.calls ?? a?.calls_total ?? 0;
+              const reached = a?.goalReached ?? a?.goal_reached ?? 0;
+              const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
+              const cost = a?.cost ?? a?.cost_rub ?? (a?.minutes || 0) * state.companyTariff;
+              const prog = contactPipelineStats(c);
+              const progress =
+                c.dial_state === "running" || c.dial_state === "paused"
+                  ? `${prog.called}/${prog.total}`
+                  : `${(c.contacts || []).length} конт.`;
+              const activity =
+                c.dial_state === "running"
+                  ? "Сейчас"
+                  : c.dial_state === "paused"
+                    ? "На паузе"
+                    : c.ever_started
+                      ? "Была"
+                      : "—";
               return `<tr>
               <td><a href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">${escapeHtml(c.name || "Без названия")}</a></td>
-              <td>${escapeHtml(dialLabel(c.dial_state))}</td>
-              <td>${escapeHtml(String(a?.calls ?? "—"))}</td>
-              <td>${escapeHtml(String(a?.goalReached ?? "—"))}</td>
+              <td>${statusBadgeHtml(c, { compact: true })}</td>
+              <td>${escapeHtml(progress)}</td>
+              <td>${escapeHtml(conv)}</td>
+              <td>${hasCampaignCalls(c) ? `${escapeHtml(String(cost))} ₽` : "—"}</td>
+              <td>${escapeHtml(activity)}</td>
             </tr>`;
             })
             .join("")}</tbody>
@@ -1039,19 +1291,21 @@ function pageAnalytics() {
       )
     : `<p class="hint">Пока нет кампаний</p>`;
 
+  const campBlock = camp
+    ? blockCampaignAnalytics(camp)
+    : `<div class="analytics-empty"><p class="analytics-empty-title">Выберите кампанию</p><p class="hint">Откройте кампанию в разделе «Кампании»</p></div>`;
+
   const body = `<div class="desk-section-block">
       <h3 class="desk-block-title">${camp ? escapeHtml(camp.name || "Без названия") : "Выбранная кампания"}</h3>
-      <p class="hint desk-block-lead">${camp ? "Метрики активной кампании" : "Откройте кампанию в разделе «Кампании»"}</p>
-      <div class="metrics-band analytics-page-metrics">
-        ${camp ? blockCampaignAnalytics(camp) : `<p class="hint">Пока нет данных по кампании</p>`}
-      </div>
+      <p class="hint desk-block-lead">${hasAnyCalls ? "Ключевые метрики активной кампании" : "Метрики появятся после первого звонка"}</p>
+      <div class="metrics-band analytics-page-metrics">${campBlock}</div>
     </div>
     <div class="desk-section-block">
       <h3 class="desk-block-title">Все кампании</h3>
       ${listMetrics}
     </div>`;
 
-  return deskPage("Аналитика", "Звонки, минуты, стоимость и выгрузка Excel", body, { id: "sec-analytics" });
+  return deskPage("Аналитика", "Конверсия, стоимость и выгрузка по кампаниям", body, { id: "sec-analytics" });
 }
 
 function analyticsMetric(label, value, hint = "") {
@@ -1063,35 +1317,33 @@ function analyticsMetric(label, value, hint = "") {
 }
 
 function blockCampaignAnalytics(camp) {
+  const hasCalls = hasCampaignCalls(camp);
   const a = camp.analytics;
-  if (!a) {
-    return `<div class="metrics-grid metrics-grid-compact">
-      ${analyticsMetric("Звонков", "0")}
-      ${analyticsMetric("До цели", "0", "По итогам разговора")}
-      ${analyticsMetric("Минуты", "0")}
-      ${analyticsMetric("Стоимость", "0 ₽", `Тариф ${state.companyTariff} ₽/мин`)}
+  if (!hasCalls || (!a && !hasCalls)) {
+    return `<div class="analytics-empty">
+      <p class="analytics-empty-title">После первого звонка здесь появятся метрики</p>
+      <p class="hint analytics-empty-lead">Конверсия, длительность разговоров и стоимость — всё в одной строке, без нулей до старта.</p>
     </div>
-      <div class="row-actions">
-        <button class="btn secondary" type="button" id="export-excel">Скачать Excel</button>
-      </div>
-      <p class="hint">Нули до звонков допустимы — можно выгрузить пустой отчёт</p>
-      <p class="hint" id="export-status" hidden></p>
-      <div class="error" id="export-error" hidden></div>`;
+    <div class="row-actions analytics-export-row">
+      <button class="btn secondary" type="button" id="export-excel" disabled title="Доступно после первого звонка">Скачать Excel</button>
+    </div>`;
   }
-  const cost = a.cost ?? a.cost_rub ?? (a.minutes || 0) * state.companyTariff;
-  return `<div class="metrics-grid">
-      ${analyticsMetric("Звонков", a.calls ?? a.calls_total ?? 0)}
-      ${analyticsMetric("Средняя длительность", a.avgDuration || a.avg_duration || "—")}
-      ${analyticsMetric("До цели", a.goalReached ?? a.goal_reached ?? 0, "По итогам разговора")}
-      ${analyticsMetric("Минуты разговора", a.minutes ?? a.minutes_total ?? 0)}
-      ${analyticsMetric("Тариф за минуту", `${state.companyTariff} ₽`)}
-      ${analyticsMetric("Стоимость", `${cost} ₽`, "Минуты × тариф")}
+  const calls = a?.calls ?? a?.calls_total ?? 0;
+  const reached = a?.goalReached ?? a?.goal_reached ?? 0;
+  const minutes = a?.minutes ?? a?.minutes_total ?? 0;
+  const cost = a?.cost ?? a?.cost_rub ?? minutes * state.companyTariff;
+  const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
+  return `<div class="metrics-grid metrics-grid-4">
+      ${analyticsMetric("Звонков", calls)}
+      ${analyticsMetric("Дозвоны / целевые", `${reached}`, "Итоги по цели")}
+      ${analyticsMetric("Конверсия", conv)}
+      ${analyticsMetric("Стоимость", `${cost} ₽`, `Тариф ${state.companyTariff} ₽/мин`)}
     </div>
-      <div class="row-actions">
-        <button class="btn" type="button" id="export-excel">Скачать Excel</button>
-      </div>
+    <div class="row-actions analytics-export-row">
+      <button class="btn secondary" type="button" id="export-excel">Скачать Excel</button>
       <p class="hint" id="export-status" hidden></p>
-      <div class="error" id="export-error" hidden></div>`;
+      <div class="error" id="export-error" hidden></div>
+    </div>`;
 }
 
 function telephonyStatusLine() {
@@ -1270,36 +1522,60 @@ function dialActionsHtml(camp) {
       : false;
   if (camp.dial_state === "running") {
     return `<div class="launch-cluster launch-cluster-compact">
-      <button class="btn" type="button" id="dial-pause" ${roAttr()}>Пауза</button>
-      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
+      <button class="btn secondary" type="button" id="dial-pause" ${roAttr()}>Приостановить</button>
+      <button class="btn ghost danger-ghost" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
       <p class="hint" id="dial-progress" hidden></p>
     </div>`;
   }
   if (camp.dial_state === "paused") {
     return `<div class="launch-cluster launch-cluster-compact">
-      <button class="btn" type="button" id="dial-resume" ${roAttr()}>Продолжить</button>
-      <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
+      <button class="btn" type="button" id="dial-resume" ${roAttr()}>Продолжить обзвон</button>
+      <button class="btn ghost danger-ghost" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
       <p class="hint" id="dial-progress" hidden></p>
     </div>`;
   }
   const disabled = !canStart || locked();
-  return `<div class="launch-cluster">
-      <button class="btn" type="button" id="dial-start" ${disabled ? "disabled" : ""}>Начать обзвон</button>
+  const primaryReason = reasons[0];
+  const whyHtml = disabled && primaryReason
+    ? `<p class="launch-blocker" id="launch-blocker"><span class="launch-blocker-label">Почему нельзя:</span> ${reasonLinkHtml(primaryReason)}</p>`
+    : "";
+  const nextCta =
+    disabled && primaryReason
+      ? `<div class="launch-next-action">${reasonCtaHtml(primaryReason)}</div>`
+      : "";
+  return `<div class="launch-cluster launch-cluster-main">
+      <button class="btn launch-primary" type="button" id="dial-start" ${disabled ? "disabled aria-describedby=\"launch-blocker\"" : ""}>Начать обзвон</button>
+      ${whyHtml}
+      ${nextCta}
       <p class="hint" id="dial-progress" hidden>Запускаем…</p>
     </div>`;
 }
 
-function flowStep(num, title, hint, bodyHtml, { id = "" } = {}) {
-  return `<div class="flow-step"${id ? ` id="${escapeHtml(id)}"` : ""}>
-    <div class="flow-step-head">
-      <span class="flow-step-num" aria-hidden="true">${num}</span>
-      <div class="flow-step-titles">
-        <h3 class="flow-step-title">${escapeHtml(title)}</h3>
-        ${hint ? `<p class="hint flow-step-hint">${escapeHtml(hint)}</p>` : ""}
-      </div>
-    </div>
-    <div class="flow-step-body">${bodyHtml}</div>
-  </div>`;
+function formZone(title, hint, bodyHtml, { id = "" } = {}) {
+  return `<section class="form-zone"${id ? ` id="${escapeHtml(id)}"` : ""}>
+    <h3 class="form-zone-title">${escapeHtml(title)}</h3>
+    ${hint ? `<p class="hint form-zone-hint">${escapeHtml(hint)}</p>` : ""}
+    ${bodyHtml}
+  </section>`;
+}
+
+function scenarioStatusBanner(camp, { weak, started, pending, genErr, hasServerPreview }) {
+  if (started) {
+    return `<div class="banner banner-warn scenario-banner">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>`;
+  }
+  if (pending) {
+    return `<div class="banner scenario-banner" id="generate-pending"><strong>Собираем сценарий…</strong></div>`;
+  }
+  if (genErr) {
+    return `<div class="banner banner-danger scenario-banner" id="generate-error"><strong>${escapeHtml(genErr)}</strong></div>`;
+  }
+  if (weak) {
+    return `<div class="banner banner-warn scenario-banner"><strong>Сценарий пока слишком слабый для обзвона.</strong> Допишите цель и сведения ниже</div>`;
+  }
+  if (!hasServerPreview) {
+    return `<p class="hint scenario-banner-hint" id="preview-empty">Сохраните цель и сведения — появится, как робот понял сценарий</p>`;
+  }
+  return "";
 }
 
 function deskPage(title, lead, bodyHtml, { id = "", backHref = "", backLabel = "← Назад", className = "" } = {}) {
@@ -1336,25 +1612,300 @@ function deskStatCard(label, valueHtml, hint = "", { tone = "" } = {}) {
   </div>`;
 }
 
+function workspaceTabsHtml(activeTab) {
+  return `<nav class="workspace-tabs" aria-label="Разделы кампании">
+    ${WORKSPACE_TABS.map(
+      (t) =>
+        `<button type="button" class="workspace-tab${t.id === activeTab ? " active" : ""}" data-workspace-tab="${t.id}" aria-selected="${t.id === activeTab ? "true" : "false"}">${escapeHtml(t.label)}</button>`
+    ).join("")}
+  </nav>`;
+}
+
+function blockCallRules(camp) {
+  const sch = camp.schedule || {};
+  const days = formatDaysSummary(sch.days);
+  const from = sch.from || "10:00";
+  const to = sch.to || "18:00";
+  const tz = sch.tz || "Europe/Moscow";
+  const retries = camp.retries ?? 2;
+  const started = isStarted(camp);
+  return `<section class="call-rules-block" id="sec-call-rules">
+    <h3 class="call-rules-title">Правила звонков</h3>
+    <dl class="call-rules-list">
+      <div class="call-rules-item"><dt>Часовой пояс</dt><dd>${escapeHtml(tz)}</dd></div>
+      <div class="call-rules-item"><dt>Окно обзвона</dt><dd>${escapeHtml(days)} · ${escapeHtml(from)}–${escapeHtml(to)}</dd></div>
+      <div class="call-rules-item"><dt>Перезвоны</dt><dd>${escapeHtml(String(retries))} ${escapeHtml(retriesLabel(retries))} при недозвоне</dd></div>
+      <div class="call-rules-item"><dt>Не звоним</dt><dd>Отменённые номера, уже достигнута цель, ручная пауза кампании</dd></div>
+    </dl>
+    ${
+      started
+        ? `<p class="hint">После старта правила только для просмотра</p>`
+        : `<button class="btn secondary" type="button" id="schedule-open-inline">Изменить расписание</button>`
+    }
+  </section>`;
+}
+
+function blockTestingSection(camp) {
+  const started = isStarted(camp);
+  if (started) {
+    return `<section class="testing-block testing-block--disabled">
+      <h3 class="testing-title">Тестирование</h3>
+      <p class="hint">Тестовый звонок доступен до запуска кампании. Создайте новую кампанию для проверки сценария.</p>
+    </section>`;
+  }
+  const preview = previewForDisplay(camp);
+  const hasPreview = Boolean(preview.greeting || preview.says);
+  return `<section class="testing-block" id="sec-testing">
+    <h3 class="testing-title">Тестирование</h3>
+    <p class="hint testing-lead">Проверьте, как агент понял цель, до первого реального звонка.</p>
+    ${
+      hasPreview
+        ? `<div class="testing-summary">
+            <p class="testing-kicker">Как агент понял цель</p>
+            <p>${escapeHtml(preview.says || camp.goal || "—")}</p>
+          </div>
+          ${isWeakScenario(camp) ? `<p class="hint testing-warn">⚠ Сценарий пока слабый — допишите цель и сведения</p>` : ""}
+          <div class="row-actions">
+            <button class="btn secondary" type="button" disabled title="Тестовый звонок скоро">Тестовый звонок</button>
+            <button class="btn ghost" type="button" data-workspace-tab="scenario">Редактировать сценарий</button>
+          </div>
+          <p class="hint">Тестовый звонок и симуляция диалога появятся после подключения backend.</p>`
+        : `<p class="hint">Сначала сохраните цель и сведения — затем можно будет протестировать сценарий.</p>`
+    }
+  </section>`;
+}
+
+function blockCallProgress(camp) {
+  const active = camp.dial_state === "running" || camp.dial_state === "paused";
+  if (!active && !hasCampaignCalls(camp)) {
+    return `<section class="call-progress-empty">
+      <p class="hint">Ход обзвона появится после запуска кампании</p>
+    </section>`;
+  }
+  const prog = contactPipelineStats(camp);
+  const a = camp.analytics || {};
+  const calls = a.calls ?? a.calls_total ?? prog.called;
+  const reached = a.goalReached ?? a.goal_reached ?? prog.done;
+  const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
+  const cost = a.cost ?? a.cost_rub ?? (a.minutes || 0) * state.companyTariff;
+  const funnel = `<div class="call-funnel" role="img" aria-label="Воронка результатов">
+    <div class="funnel-step"><span class="funnel-value">${prog.inQueue}</span><span class="funnel-label">В очереди</span></div>
+    <div class="funnel-step"><span class="funnel-value">${calls}</span><span class="funnel-label">Звонков</span></div>
+    <div class="funnel-step funnel-step--ok"><span class="funnel-value">${reached}</span><span class="funnel-label">Дозвоны</span></div>
+    <div class="funnel-step funnel-step--ok"><span class="funnel-value">${reached}</span><span class="funnel-label">Целевые</span></div>
+    <div class="funnel-step funnel-step--muted"><span class="funnel-value">${prog.noAnswer}</span><span class="funnel-label">Недозвон</span></div>
+  </div>`;
+  const recent = (camp.contacts || [])
+    .filter((c) => c.attempts?.length || c.last_attempt)
+    .slice(0, 8)
+    .map((c) => {
+      const last = c.last_attempt || (c.attempts || [])[c.attempts.length - 1];
+      const outcome = last?.cause_code || last?.outcome || statusLabel(c.status);
+      const dur = last?.duration_sec != null ? `${last.duration_sec} с` : "—";
+      return `<tr><td>${escapeHtml(maskPhone(c.phone))}</td><td>${escapeHtml(statusLabel(c.status))}</td><td>${escapeHtml(outcomeLabel(outcome))}</td><td>${escapeHtml(dur)}</td><td class="hint">—</td></tr>`;
+    })
+    .join("");
+  return `<section class="call-progress-block" id="sec-call-progress">
+    <header class="call-progress-head">
+      <h3 class="call-progress-title">Ход обзвона</h3>
+      ${camp.dial_state === "running" ? `<span class="status-badge status-badge--ok status-badge--compact">Идёт</span>` : ""}
+    </header>
+    <div class="metrics-grid metrics-grid-compact call-progress-metrics">
+      ${analyticsMetric("В очереди", prog.inQueue)}
+      ${analyticsMetric("Звонков", calls)}
+      ${analyticsMetric("Конверсия", conv)}
+      ${analyticsMetric("Потрачено", `${cost} ₽`)}
+    </div>
+    ${funnel}
+    ${
+      recent
+        ? `<h4 class="call-feed-title">Последние звонки</h4>
+           <div class="desk-surface desk-table-surface"><table class="data call-feed-table">
+             <thead><tr><th>Контакт</th><th>Статус</th><th>Итог</th><th>Длит.</th><th>Время</th></tr></thead>
+             <tbody>${recent}</tbody>
+           </table></div>`
+        : `<p class="hint">Звонки появятся здесь по мере обзвона</p>`
+    }
+  </section>`;
+}
+
+function blockCallQuality(camp) {
+  if (!hasCampaignCalls(camp)) {
+    return `<section class="quality-block quality-block--empty">
+      <h3 class="quality-title">Качество звонков</h3>
+      <p class="hint">После звонков здесь будут записи, транскрипты и AI-резюме. Флаги качества — после подключения backend.</p>
+    </section>`;
+  }
+  const withTranscript = (camp.contacts || []).filter((c) => c.last_transcript || c.transcript).slice(0, 6);
+  if (!withTranscript.length) {
+    return `<section class="quality-block quality-block--empty">
+      <h3 class="quality-title">Качество звонков</h3>
+      <p class="hint">Транскрипты и записи появятся после звонков с разговором.</p>
+    </section>`;
+  }
+  const rows = withTranscript
+    .map(
+      (c) => `<tr>
+      <td>${escapeHtml(maskPhone(c.phone))}</td>
+      <td>${escapeHtml(c.verdict || statusLabel(c.status))}</td>
+      <td class="quality-transcript">${escapeHtml((c.last_transcript || c.transcript || "").slice(0, 80))}…</td>
+      <td><button class="btn ghost" type="button" disabled title="Скоро">Проверить</button></td>
+    </tr>`
+    )
+    .join("");
+  return `<section class="quality-block" id="sec-quality">
+    <h3 class="quality-title">Качество звонков</h3>
+    <p class="hint">Технические ошибки, недозвон и целевой результат — отдельно, не в одной метрике.</p>
+    <div class="desk-surface desk-table-surface"><table class="data">
+      <thead><tr><th>Контакт</th><th>Итог</th><th>Резюме</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </section>`;
+}
+
+function blockBusinessOutcomes(camp) {
+  const verdicts = verdictsForDisplay(camp);
+  const contacts = camp.contacts || [];
+  if (!hasCampaignCalls(camp) && !verdicts.length) {
+    return `<div class="results-placeholder">
+      <p class="hint">Итоги кампании появятся после первых звонков</p>
+    </div>`;
+  }
+  const defaultOutcomes = verdicts.length
+    ? verdicts.map((v) => (typeof v === "string" ? v : v.label || v.id))
+    : ["Запись подтверждена", "Нужен перезвон", "Передать менеджеру", "Отказ", "Не дозвонились"];
+  const rows = defaultOutcomes
+    .map((label) => {
+      const count = contacts.filter((c) => c.verdict === label || (label.includes("Недозвон") && c.status === STATUS.no_answer)).length;
+      const pct = contacts.length ? `${Math.round((count / contacts.length) * 100)}%` : "—";
+      return `<tr><td>${escapeHtml(label)}</td><td>${count}</td><td>${pct}</td><td class="hint">—</td><td class="hint">—</td></tr>`;
+    })
+    .join("");
+  return `<section class="outcomes-block">
+    <h3 class="outcomes-block-title">Итоги кампании</h3>
+    <div class="desk-surface desk-table-surface"><table class="data">
+      <thead><tr><th>Итог</th><th>Кол-во</th><th>Доля</th><th>Изменение</th><th>Действие</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <p class="hint">Интеграции с CRM и webhook — когда backend будет готов.</p>
+  </section>`;
+}
+
+function onboardingStepHtml(num, title, hint, body, { locked: stepLocked = false, done = false } = {}) {
+  if (stepLocked) {
+    return `<details class="onboard-step onboard-step--locked">
+      <summary><span class="onboard-step-num">${num}</span> ${escapeHtml(title)} — ${escapeHtml(hint)}</summary>
+    </details>`;
+  }
+  return `<section class="onboard-step${done ? " onboard-step--done" : ""}" id="onboard-step-${num}">
+    <header class="onboard-step-head">
+      <span class="onboard-step-num${done ? " onboard-step-num--ok" : ""}">${done ? "✓" : num}</span>
+      <div><h3 class="onboard-step-title">${escapeHtml(title)}</h3>${hint ? `<p class="hint onboard-step-hint">${escapeHtml(hint)}</p>` : ""}</div>
+    </header>
+    <div class="onboard-step-body">${body}</div>
+  </section>`;
+}
+
+function workspaceOverviewTab(camp, weak, started) {
+  const { completed, total } = readinessProgress(camp);
+  const goalDone = goalIsFilled(camp);
+  const contactsDone = Boolean(camp.contacts?.length);
+  const telDone = state.telephony.status === "ok" && scheduleIsSet(camp);
+  const step3Locked = !contactsDone;
+  const step4Locked = !telDone;
+
+  const step1Simple = onboardingStepHtml(
+    1,
+    "Цель и контекст",
+    "Опишите, зачем звоним",
+    `<p class="hint">${escapeHtml(camp.goal || "Цель ещё не задана")}</p>
+     <button class="btn secondary" type="button" data-workspace-tab="scenario">${goalDone ? "Изменить" : "Заполнить"}</button>`,
+    { done: goalDone }
+  );
+  const step2 = onboardingStepHtml(
+    2,
+    "Контакты",
+    "Загрузите CSV или Excel",
+    `<p class="hint">${(camp.contacts || []).length ? `${camp.contacts.length} контактов загружено` : "Файл ещё не загружен"}</p>
+     <button class="btn secondary" type="button" data-workspace-tab="contacts">${contactsDone ? "Открыть" : "Загрузить"}</button>`,
+    { locked: !goalDone, done: contactsDone }
+  );
+  const step3 = onboardingStepHtml(
+    3,
+    "Телефония и время звонков",
+    "Подключите SIP и задайте окно обзвона",
+    `${blockCallRules(camp)}`,
+    { locked: step3Locked, done: telDone }
+  );
+  const step4 = onboardingStepHtml(
+    4,
+    "Проверка и запуск",
+    "Проверьте сценарий и запустите",
+    `${blockTestingSection(camp)}`,
+    { locked: step4Locked, done: completed === total }
+  );
+
+  return `<div class="workspace-tab-panel" data-tab="overview">
+    ${launchChecklistHtml(camp)}
+    <div class="onboard-steps">${step1Simple}${step2}${step3}${step4}</div>
+    ${blockCallProgress(camp)}
+  </div>`;
+}
+
 function campaignWorkspace(camp) {
   const started = isStarted(camp);
   const weak = isWeakScenario(camp);
-  return `<div class="workspace workspace-desk" data-camp="${escapeHtml(camp.id)}">
-    <div class="workspace-chrome">
-    <header class="workspace-bar workspace-bar-desk">
-      <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
-      <div class="workspace-title-row">
-        <div class="workspace-heading">
-          <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
-          <span class="badge badge-quiet">${escapeHtml(dialLabel(camp.dial_state))}</span>
-        </div>
-        <div class="workspace-toolbar">
-          <a class="workspace-balance-text hint" href="#/cabinet/tariffs">Баланс ${escapeHtml(String(state.companyBalance))} ₽ · ${escapeHtml(String(state.companyTariff))} ₽/мин</a>
-          <div class="workspace-actions">${dialActionsHtml(camp)}</div>
-        </div>
+  const tab = state.ui.workspaceTab || "overview";
+  const { completed, total } = readinessProgress(camp);
+
+  let tabContent = "";
+  if (tab === "overview") tabContent = workspaceOverviewTab(camp, weak, started);
+  else if (tab === "contacts") tabContent = `<div class="workspace-tab-panel" data-tab="contacts">${blockNumbers(camp)}</div>`;
+  else if (tab === "scenario") tabContent = `<div class="workspace-tab-panel" data-tab="scenario">${blockScenarioFlow(camp, weak, started)}</div>`;
+  else if (tab === "calls")
+    tabContent = `<div class="workspace-tab-panel" data-tab="calls">${blockCallProgress(camp)}${blockCallQuality(camp)}</div>`;
+  else if (tab === "results")
+    tabContent = `<div class="workspace-tab-panel" data-tab="results">${hasCampaignCalls(camp) ? blockBusinessOutcomes(camp) + blockCampaignAnalytics(camp) : `<div class="results-placeholder panel"><p class="hint results-placeholder-title">После первого звонка здесь появятся итоги и метрики</p>${blockBusinessOutcomes(camp)}</div>`}</div>`;
+  else if (tab === "settings")
+    tabContent = `<div class="workspace-tab-panel" data-tab="settings">
+      ${blockCallRules(camp)}
+      <div class="settings-links row-actions">
+        <a class="btn secondary" href="#/cabinet/integrations">Телефония</a>
+        <a class="btn secondary" href="#/cabinet/tariffs">Биллинг</a>
       </div>
-    </header>
-    ${readinessStripHtml(camp)}
+    </div>`;
+
+  const outcomesFold = hasCampaignCalls(camp)
+    ? `<section class="outcomes-section outcomes-panel-desk" id="sec-analytics">
+        <h2 class="section-title-bar">Итоги кампании</h2>
+        <div class="metrics-band">${blockCampaignAnalytics(camp)}</div>
+      </section>`
+    : `<section class="outcomes-fold desk-section-compact" id="sec-analytics">
+        <details>
+          <summary class="outcomes-fold-summary">Итоги кампании — после первого звонка</summary>
+          <div class="outcomes-fold-body metrics-band">${blockCampaignAnalytics(camp)}</div>
+        </details>
+      </section>`;
+
+  return `<div class="workspace workspace-desk" data-camp="${escapeHtml(camp.id)}">
+    <div class="workspace-chrome workspace-chrome-sticky">
+      <header class="workspace-bar workspace-bar-desk">
+        <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
+        <div class="workspace-title-row">
+          <div class="workspace-heading">
+            <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
+            ${statusBadgeHtml(camp)}
+          </div>
+        </div>
+      </header>
+      <div class="workspace-summary-bar">
+        <div class="workspace-summary-meta">
+          <span class="workspace-readiness">${completed} из ${total} шагов</span>
+          ${balanceChipHtml({ className: "balance-chip--workspace" })}
+        </div>
+        <div class="workspace-summary-actions">${dialActionsHtml(camp)}</div>
+      </div>
+      ${workspaceTabsHtml(tab)}
     </div>
     <div id="stop-confirm" class="panel nested" hidden>
       <p>Остановить обзвон? Текущий разговор договорим</p>
@@ -1392,23 +1943,10 @@ function campaignWorkspace(camp) {
         : ""
     }
     ${locked() ? `<p class="hint workspace-locked-note">Аккаунт заблокирован</p>` : ""}
-
     ${scheduleDrawerHtml(camp)}
     ${launchReasonsDrawerHtml(camp)}
-
-    <div class="workspace-desk-body">
-      <div class="workspace-col workspace-col--main">
-        ${blockScenarioFlow(camp, weak, started)}
-      </div>
-      <div class="workspace-col workspace-col--side">
-        ${blockNumbers(camp)}
-      </div>
-    </div>
-
-    <section class="flow-section outcomes-section desk-section-compact outcomes-panel-desk" id="sec-analytics">
-      <h2 class="section-title-bar">Итоги кампании</h2>
-      <div class="metrics-band">${blockCampaignAnalytics(camp)}</div>
-    </section>
+    <div class="workspace-main">${tabContent}</div>
+    ${tab === "overview" ? "" : outcomesFold}
   </div>`;
 }
 
@@ -1429,6 +1967,17 @@ function blockScenarioFlow(camp, weak, started) {
         : [];
   const attrs = camp.columns || [];
 
+  const verdictsBlock = `${
+    verdicts.length
+      ? `<ul class="verdict-chips">${verdicts
+          .map(
+            (v) =>
+              `<li class="verdict-chip">${escapeHtml(typeof v === "string" ? v : v.label || v.id || JSON.stringify(v))}</li>`
+          )
+          .join("")}</ul>`
+      : `<p class="hint verdicts-empty">Пока нет итогов — сохраните цель и сведения</p>`
+  }`;
+
   const contextBlock = `<div class="flow-fields">
             <div class="preview-field preview-field-full">
               <label for="preview-name">Название</label>
@@ -1442,21 +1991,15 @@ function blockScenarioFlow(camp, weak, started) {
             </div>
             <div class="preview-field preview-field-full">
               <label for="preview-details">Сведения</label>
-              <textarea id="preview-details" rows="5" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
+              <textarea id="preview-details" rows="4" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
               <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
             </div>
+          </div>
+          <div class="verdicts-zone" id="sec-verdicts">
+            <p class="form-zone-sub">Возможные итоги разговора</p>
+            <p class="hint">Система собрала список по цели. Менять его нельзя</p>
+            ${verdictsBlock}
           </div>`;
-
-  const verdictsBlock = `${
-    verdicts.length
-      ? `<ul class="verdict-chips">${verdicts
-          .map(
-            (v) =>
-              `<li class="verdict-chip">${escapeHtml(typeof v === "string" ? v : v.label || v.id || JSON.stringify(v))}</li>`
-          )
-          .join("")}</ul>`
-      : `<p class="hint verdicts-empty">Пока нет итогов — сохраните цель и сведения</p>`
-  }`;
 
   const voiceBlock = `<div class="preview-edit-grid preview-voice-grid">
             <div class="preview-field">
@@ -1527,38 +2070,18 @@ function blockScenarioFlow(camp, weak, started) {
         }
       </div>`;
 
-  return `<section class="flow-section workspace-panel scenario-flow-panel" id="sec-preview">
-    <header class="scenario-flow-head">
-      <h2 class="section-title-bar scenario-flow-title">Робот так понял сценарий</h2>
-      <p class="hint scenario-flow-lead">Можно править текст и этапы — ветки рисовать не нужно</p>
+  return `<section class="flow-section workspace-panel scenario-sheet" id="sec-preview">
+    <header class="scenario-sheet-head">
+      <h2 class="scenario-sheet-title">Робот так понял сценарий</h2>
+      <p class="hint">Можно править текст и этапы — ветки рисовать не нужно</p>
     </header>
-    <form class="preview-panel scenario-flow" id="preview-form">
-      ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
-      ${
-        weak && !started
-          ? `<div class="banner banner-warn">
-          <strong>Сценарий пока слишком слабый для обзвона</strong>
-          <p class="hint">Допишите цель и сведения или поправьте текст ниже</p>
-        </div>`
-          : ""
-      }
-      ${pending ? `<div class="banner" id="generate-pending"><strong>Собираем сценарий…</strong></div>` : ""}
-      ${
-        genErr && !pending
-          ? `<div class="banner banner-danger" id="generate-error"><strong>${escapeHtml(genErr)}</strong></div>`
-          : ""
-      }
-      ${
-        !hasServerPreview && !pending && !started
-          ? `<p class="hint scenario-empty-note" id="preview-empty">Сначала сохраните цель и сведения — тогда появится, как робот понял сценарий.</p>`
-          : ""
-      }
+    <form class="preview-panel scenario-sheet-form" id="preview-form">
+      ${scenarioStatusBanner(camp, { weak, started, pending, genErr, hasServerPreview })}
 
-      <div class="flow-steps">
-        ${flowStep(1, "Цель и сведения", "Название, цель, контекст разговора", contextBlock, { id: "sec-context" })}
-        ${flowStep(2, "Возможные итоги разговора", "Система собрала список по цели. Менять его нельзя", verdictsBlock, { id: "sec-verdicts" })}
-        ${hasServerPreview || pending ? flowStep(3, "Как звучит робот", "Приветствие, реплики, тон", voiceBlock, { id: "sec-voice" }) : ""}
-        ${flowStep(hasServerPreview || pending ? 4 : 3, "Сценарий и этапы", "Название столбца в файле должно совпадать с полем в сценарии", stagesBlock, { id: "sec-scenario" })}
+      <div class="form-zones">
+        ${formZone("Цель и сведения", "", contextBlock, { id: "sec-context" })}
+        ${hasServerPreview || pending ? formZone("Как звучит робот", "", voiceBlock, { id: "sec-voice" }) : ""}
+        ${formZone("Сценарий и этапы", "Название столбца в файле должно совпадать с полем в сценарии", stagesBlock, { id: "sec-scenario" })}
       </div>
 
       ${
@@ -1764,6 +2287,63 @@ function matchesOutcomeFilter(contact, outcomeFilterId) {
   return spec.codes.includes(code);
 }
 
+function renderUploadPreview(preview) {
+  if (!preview) return "";
+  const colRows = (preview.columns || [])
+    .map((c) => `<tr><td>${escapeHtml(c.file || c)}</td><td>${escapeHtml(c.field || c)}</td></tr>`)
+    .join("");
+  const errRows = (preview.errors || [])
+    .slice(0, 5)
+    .map((e) => `<li>${escapeHtml(typeof e === "string" ? e : e.reason || "Ошибка строки")}</li>`)
+    .join("");
+  return `<div class="upload-preview panel" id="upload-preview">
+    <h4>Предпросмотр файла</h4>
+    <div class="upload-preview-stats">
+      <span><strong>${preview.total ?? 0}</strong> строк</span>
+      <span><strong>${preview.valid ?? 0}</strong> валидных</span>
+      <span class="${preview.bad ? "error" : ""}"><strong>${preview.bad ?? 0}</strong> ошибок</span>
+    </div>
+    ${preview.sample ? `<p class="hint upload-preview-sample"><strong>Пример реплики:</strong> ${escapeHtml(preview.sample)}</p>` : ""}
+    ${colRows ? `<table class="data upload-preview-cols"><thead><tr><th>Колонка файла</th><th>Поле</th></tr></thead><tbody>${colRows}</tbody></table>` : ""}
+    ${errRows ? `<ul class="upload-preview-errors">${errRows}</ul><button class="btn ghost" type="button" id="export-errors" disabled>Скачать ошибки</button>` : ""}
+    <div class="row-actions">
+      <button class="btn" type="button" id="upload-preview-confirm">Подтвердить загрузку</button>
+      <button class="btn secondary" type="button" id="upload-preview-cancel">Отмена</button>
+    </div>
+  </div>`;
+}
+
+function contactsTemplateCsv() {
+  return "phone,name,appointment_date\n+79001234567,Иван,2026-09-01\n";
+}
+
+async function previewContactsFile(file) {
+  if (!file) return null;
+  try {
+    const matrix = await rowsFromFile(file);
+    const parsed = contactsFromRows(matrix);
+    if (parsed.error) return { error: parsed.error, total: 0, valid: 0, bad: 0 };
+    const header = matrix[0] || [];
+    const columns = header.map((h) => ({ file: h, field: isPhoneHeader(h) ? "phone" : h }));
+    const sampleContact = parsed.good[0];
+    const sample = sampleContact
+      ? `Здравствуйте${sampleContact.name ? `, ${sampleContact.name}` : ""}!`
+      : "";
+    return {
+      file,
+      total: Math.max(0, matrix.length - 1),
+      valid: parsed.good.length,
+      bad: parsed.bad,
+      columns,
+      good: parsed.good,
+      errors: parsed.bad ? [`${parsed.bad} строк с неверным номером`] : [],
+      sample,
+    };
+  } catch {
+    return { error: "format", total: 0, valid: 0, bad: 0 };
+  }
+}
+
 function sectionContacts(camp) {
   if (!camp) return "";
   const started = isStarted(camp);
@@ -1821,22 +2401,27 @@ function sectionContacts(camp) {
         .join("")
     : `<tr class="contacts-empty-row"><td colspan="4"><p class="hint contacts-empty">Загрузите контакты из Excel или CSV. Нужен столбец с телефоном</p></td></tr>`;
 
-  const uploadZone = `<div class="upload-zone${contacts.length ? " upload-zone-quiet" : " upload-zone-empty"}${state.ui.contactsUploading ? " is-uploading" : ""}" id="upload-zone">
+  const uploadZone = `<div class="upload-zone upload-zone-dnd${contacts.length ? " upload-zone-quiet" : " upload-zone-empty"}${state.ui.contactsUploading ? " is-uploading" : ""}" id="upload-zone">
         <div class="upload-zone-main">
-          <p class="upload-zone-title">${contacts.length ? "Догрузить файл" : "Загрузите контакты"}</p>
-          <p class="hint">Excel или CSV</p>
-          <button class="btn${contacts.length ? " secondary" : ""}" type="button" id="pick-file" ${roAttr()}${state.ui.contactsUploading ? " disabled" : ""}>Выбрать файл</button>
+          <p class="upload-zone-title">${contacts.length ? "Догрузить файл" : "Перетащите CSV или Excel сюда"}</p>
+          <p class="hint">Форматы: .csv, .xlsx, .xls · нужен столбец с телефоном</p>
+          <div class="upload-zone-actions">
+            <button class="btn${contacts.length ? " secondary" : ""}" type="button" id="pick-file" ${roAttr()}${state.ui.contactsUploading ? " disabled" : ""}>Выбрать файл</button>
+            <a class="btn ghost" href="#" id="download-template" download="callmate-contacts-template.csv">Скачать шаблон</a>
+          </div>
           <input class="sr-file" type="file" id="contact-file" accept=".csv,.xlsx,.xls" tabindex="-1" aria-hidden="true" ${roAttr()} ${state.ui.contactsUploading ? "disabled" : ""} />
         </div>
-        <p class="hint consent">Загружая номера, вы подтверждаете, что у вас есть законные основания звонить этим людям. CallMate согласия за вас не собирает. Храните согласия и документы у себя</p>
+        <details class="consent-disclosure"${state.ui.consentOpen ? " open" : ""}>
+          <summary>Юридическое предупреждение</summary>
+          <p class="consent">Загружая номера, вы подтверждаете законные основания для обзвона. CallMate согласия не собирает — храните документы у себя.</p>
+        </details>
       </div>
-      <p id="upload-progress" class="hint" ${state.ui.contactsUploading ? "" : "hidden"}>Загружаем контакты…</p>
-      <p class="hint" id="upload-progress-hint" ${state.ui.contactsUploading ? "" : "hidden"}>Большой файл может занять несколько минут</p>
-      <p class="hint" id="upload-batch-hint" ${state.ui.contactsUploading ? "" : "hidden"}>Файл обрабатывается на сервере пачками</p>
-      <p class="hint ok-line" id="upload-ok" hidden>Контакты загружены</p>
-      <div id="upload-errors"></div>
+      ${state.ui.contactUploadPreview ? renderUploadPreview(state.ui.contactUploadPreview) : ""}
+      <p id="upload-progress" class="hint upload-state" ${state.ui.contactsUploading ? "" : "hidden"}>Загружаем контакты…</p>
+      <p class="hint upload-state" id="upload-progress-hint" ${state.ui.contactsUploading ? "" : "hidden"}>Большой файл может занять несколько минут</p>
+      <p class="hint ok-line upload-state" id="upload-ok" hidden>Контакты загружены</p>
+      <div class="error upload-state" id="upload-errors"></div>
       ${warnings.map((w) => `<p class="error">${escapeHtml(w)}</p>`).join("")}
-      <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
       <div id="reload-precheck" class="panel nested" hidden></div>
       <div id="new-col-alert" class="panel nested" hidden></div>`;
 
@@ -1865,9 +2450,9 @@ function sectionContacts(camp) {
       </div>`
     : "";
 
-  return `<section class="flow-section workspace-panel contacts-flow-panel" id="sec-contacts">
-    <h2 class="section-title-bar contacts-flow-title">Номера</h2>
-    <div class="contacts-panel contacts-flow">
+  return `<section class="flow-section workspace-panel contacts-sheet" id="sec-contacts">
+    <h2 class="contacts-sheet-title">Номера</h2>
+    <div class="contacts-panel contacts-sheet-body">
       ${reloadHint}
       ${uploadZone}
       ${listBlock}
@@ -2230,30 +2815,25 @@ function loginView() {
   const apiHint = hasApi()
     ? `<p class="hint">В кабинет компании или в админку</p>`
     : `<p class="hint">Сначала укажите адрес API — сейчас только проверка вёрстки</p>`;
-  return `<div class="login-wrap login-wrap-desk">
-    <section class="login-hero" aria-label="CallMate">
-      <p class="login-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
-      <p class="login-lead">Кабинет голосовых кампаний</p>
-    </section>
-    <aside class="login-aside">
-      <form class="login-panel" id="login-form">
-        <h1 class="login-panel-title">Вход</h1>
-        ${apiHint}
-        <div class="flow-fields login-fields">
-          <div class="preview-field preview-field-full">
-            <label for="login">Логин</label>
-            <input id="login" name="login" autocomplete="username" placeholder="Ваш логин" />
-          </div>
-          <div class="preview-field preview-field-full">
-            <label for="password">Пароль</label>
-            <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Пароль" />
-          </div>
+  return `<div class="login-wrap login-wrap-center">
+    <form class="login-panel" id="login-form">
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
+      <h1 class="login-panel-title">Вход</h1>
+      ${apiHint}
+      <div class="flow-fields login-fields">
+        <div class="preview-field preview-field-full">
+          <label for="login">Логин</label>
+          <input id="login" name="login" autocomplete="username" placeholder="Ваш логин" />
         </div>
-        <button class="btn login-submit" id="submit" type="submit">Войти</button>
-        <div class="error" id="form-error" hidden></div>
-        <p class="hint desktop-note">Удобнее на компьютере. Телефонную вёрстку сделаем позже</p>
-      </form>
-    </aside>
+        <div class="preview-field preview-field-full">
+          <label for="password">Пароль</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Пароль" />
+        </div>
+      </div>
+      <button class="btn login-submit" id="submit" type="submit">Войти</button>
+      <div class="error" id="form-error" hidden></div>
+      <p class="hint desktop-note">Удобнее на компьютере. Телефонную вёрстку сделаем позже</p>
+    </form>
   </div>`;
 }
 
@@ -2264,17 +2844,14 @@ function forbiddenView() {
   } else if (state.session && state.role === "superadmin") {
     action = `<button class="btn" id="forbidden-action" type="button">В админку</button>`;
   }
-  return `<div class="login-wrap">
-    <section class="login-hero" aria-label="CallMate">
-      <p class="login-brand">CallMate</p>
-      <p class="login-lead">Нужен другой доступ — вернитесь ко входу.</p>
-    </section>
-    <aside class="login-aside"><div class="panel">
-      <h1>Нет доступа</h1>
+  return `<div class="login-wrap login-wrap-center">
+    <div class="login-panel">
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
+      <h1 class="login-panel-title">Нет доступа</h1>
       <p class="hint">У вас нет доступа к этой странице</p>
       ${action}
-      <button class="btn secondary" id="forbidden-logout" type="button">Выйти</button>
-    </div></aside>
+      <button class="btn secondary login-panel-secondary" id="forbidden-logout" type="button">Выйти</button>
+    </div>
   </div>`;
 }
 
@@ -2391,6 +2968,40 @@ function bindForbidden() {
   };
 }
 
+function bindMobileNav() {
+  const sel = document.getElementById("mobile-nav-select");
+  if (!sel) return;
+  sel.onchange = () => {
+    const href = sel.value;
+    if (href) navigate(href.replace(/^#/, ""));
+  };
+}
+
+function bindWorkspaceTabs() {
+  document.querySelectorAll("[data-workspace-tab]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const tab = btn.getAttribute("data-workspace-tab");
+      if (!tab) return;
+      state.ui.workspaceTab = tab;
+      render();
+    });
+  });
+  document.querySelectorAll("[data-open-schedule]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.ui.scheduleDrawerOpen = true;
+      render();
+    });
+  });
+  const scheduleInline = document.getElementById("schedule-open-inline");
+  if (scheduleInline) {
+    scheduleInline.onclick = () => {
+      state.ui.scheduleDrawerOpen = true;
+      render();
+    };
+  }
+}
+
 function bindJumpNav() {
   document.querySelectorAll("[data-jump]").forEach((el) => {
     el.addEventListener("click", (e) => {
@@ -2459,6 +3070,8 @@ function bindShell() {
   }
 
   bindJumpNav();
+  bindWorkspaceTabs();
+  bindMobileNav();
   bindAdminForms();
   bindCampaignForms();
   bindTelephony();
@@ -3576,17 +4189,47 @@ function bindContacts() {
   const file = document.getElementById("contact-file");
   if (pick && file) {
     pick.onclick = () => file.click();
-    file.onchange = () => uploadContactsFile(file.files?.[0]);
+    file.onchange = () => void handleContactFileSelected(file.files?.[0]);
   }
   const zone = document.getElementById("upload-zone");
   if (zone) {
     zone.ondragover = (e) => {
       e.preventDefault();
+      zone.classList.add("is-dragover");
     };
+    zone.ondragleave = () => zone.classList.remove("is-dragover");
     zone.ondrop = (e) => {
       e.preventDefault();
+      zone.classList.remove("is-dragover");
       if (locked()) return;
-      uploadContactsFile(e.dataTransfer.files?.[0]);
+      void handleContactFileSelected(e.dataTransfer.files?.[0]);
+    };
+  }
+  const template = document.getElementById("download-template");
+  if (template) {
+    template.onclick = (e) => {
+      e.preventDefault();
+      const blob = new Blob([contactsTemplateCsv()], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "callmate-contacts-template.csv";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+  }
+  const previewCancel = document.getElementById("upload-preview-cancel");
+  if (previewCancel) {
+    previewCancel.onclick = () => {
+      state.ui.contactUploadPreview = null;
+      render();
+    };
+  }
+  const previewConfirm = document.getElementById("upload-preview-confirm");
+  if (previewConfirm && state.ui.contactUploadPreview?.file) {
+    previewConfirm.onclick = () => {
+      const f = state.ui.contactUploadPreview.file;
+      state.ui.contactUploadPreview = null;
+      void uploadContactsFile(f, { skipPreview: true });
     };
   }
 
@@ -3820,8 +4463,35 @@ async function refreshCampaignContacts(camp) {
   persistCampaigns();
 }
 
-async function uploadContactsFile(file) {
+async function handleContactFileSelected(file) {
   if (!file || locked() || state.ui.contactsUploading) return;
+  const preview = await previewContactsFile(file);
+  if (preview?.error === "format") {
+    state.ui.contactUploadPreview = null;
+    render();
+    const errBox = document.getElementById("upload-errors");
+    if (errBox) errBox.innerHTML = `<p class="error">${escapeHtml(errorMessage("unsupported_format"))}</p>`;
+    return;
+  }
+  if (preview?.error === "no_phone_col") {
+    state.ui.contactUploadPreview = null;
+    render();
+    const errBox = document.getElementById("upload-errors");
+    if (errBox) {
+      errBox.innerHTML = `<p class="error">Не нашли столбец с телефоном</p><p class="hint">Нужен столбец phone, телефон или номер</p>`;
+    }
+    return;
+  }
+  state.ui.contactUploadPreview = preview;
+  render();
+}
+
+async function uploadContactsFile(file, { skipPreview = false } = {}) {
+  if (!file || locked() || state.ui.contactsUploading) return;
+  if (!skipPreview) {
+    await handleContactFileSelected(file);
+    return;
+  }
   const camp = workspaceCampaign() || activeCampaign();
   if (!camp) return;
 
@@ -3848,7 +4518,20 @@ async function uploadContactsFile(file) {
     state.ui.contactsUploading = false;
     if (progress) progress.hidden = true;
     if (hint) hint.hidden = true;
-    if (batchHint) batchHint.hidden = true;
+    const preview = state.ui.contactUploadPreview;
+    if (preview?.good?.length) {
+      camp.contacts = [...(camp.contacts || []), ...preview.good];
+      camp.columns = [...new Set([...(camp.columns || []), ...(preview.columns || []).map((c) => c.file || c)])];
+      persistCampaigns();
+      state.ui.contactUploadPreview = null;
+      render();
+      const okEl = document.getElementById("upload-ok");
+      if (okEl) {
+        okEl.hidden = false;
+        okEl.textContent = `Контакты загружены: ${preview.good.length}`;
+      }
+      return;
+    }
     if (errors) errors.innerHTML = `<p class="error">${escapeHtml(errorMessage("api_not_configured"))}</p>`;
     render();
     return;

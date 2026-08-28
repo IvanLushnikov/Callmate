@@ -22,7 +22,9 @@ https://ivanlushnikov.github.io/Callmate/
 
 ```bash
 cd /Users/ivanlusnikov/Callmate
-python3 -m http.server 5173
+python3 scripts/dev-server.py 8765
 ```
 
-Откройте `http://127.0.0.1:5173/`. Базовый URL API — `window.CALLMATE_API_BASE` или `.env` (см. `.env.example`).
+Откройте `http://127.0.0.1:8765/`. Dev-сервер проксирует `/api/*` на `callmate-api.onrender.com` — иначе с localhost вход блокирует CORS.
+
+Обычный `python3 -m http.server` — только для stub-режима без API (уберите `CALLMATE_API_BASE` в `index.html`).

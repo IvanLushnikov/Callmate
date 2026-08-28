@@ -15,8 +15,12 @@
   <body>
     <div id="app"></div>
     <script>
-      // Public API on Render (HTTPS). Override locally if needed.
-      window.CALLMATE_API_BASE = "https://callmate-api.onrender.com";
+      // Production API. On localhost use same-origin proxy (scripts/dev-server.py).
+      (function () {
+        var host = location.hostname;
+        var local = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+        window.CALLMATE_API_BASE = local ? location.origin : "https://callmate-api.onrender.com";
+      })();
     </script>
     <script type="module" src="./src/app.js"></script>
   </body>
