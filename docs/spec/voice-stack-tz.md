@@ -647,6 +647,7 @@ voice_degraded: "Часть голосовых сервисов работает
 | API client | `src/api.js` |
 | Gates | `GET /api/cabinet/campaigns/:id/gates` |
 | Handoff для FE (после утверждения) | `docs/handoff/fe/VOICE-001.md` |
+| Бэклог задач | `docs/spec/voice-stack-backlog.md` |
 | Docker stack | TBD: `infra/voice-lab/docker-compose.yml` |
 
 ---
