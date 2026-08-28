@@ -228,7 +228,27 @@ form.panel > .btn,
   margin-top: var(--s3);
 }
 
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  margin-top: var(--s4);
+}
+
 .row-actions .btn,
+.row-actions a.btn {
+  margin-top: 0;
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.row-actions .hint {
+  flex: 1 1 12rem;
+  margin: 0;
+  min-width: 0;
+}
+
 .section-head .btn,
 .empty-state .btn,
 .workspace-actions .btn {
@@ -776,7 +796,6 @@ form.panel > .btn,
 
 .preview-panel > .row-actions {
   margin-top: var(--s4);
-  align-items: center;
 }
 
 .goal-layout {

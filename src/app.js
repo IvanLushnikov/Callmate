@@ -127,6 +127,8 @@ const state = {
     contactOutcomeFilter: "all",
     generatePending: false,
     generateError: null,
+    newCampaignDraft: { name: "", goal: "", details: "" },
+    newCampaignError: null,
     saveRebuildOpen: false,
     pendingPreviewSave: null,
     contactSelectAll: false,
@@ -1390,20 +1392,22 @@ function blockNumbers(camp) {
 
 function newCampaignFormInline() {
   const pending = state.ui.generatePending;
+  const draft = state.ui.newCampaignDraft || { name: "", goal: "", details: "" };
+  const formErr = state.ui.newCampaignError;
   return `<form class="panel wide create-campaign-form" id="new-campaign-form">
-    <label>Название</label><input id="camp-name" ${roAttr()} ${pending ? "disabled" : ""} />
+    <label>Название</label><input id="camp-name" value="${escapeHtml(draft.name || "")}" ${roAttr()} ${pending ? "disabled" : ""} />
     <p class="hint">Пустое имя — не мешает запуску</p>
     <label>Цель звонка</label>
-    <input id="camp-goal" placeholder="Например: напомнить о записи" ${roAttr()} ${pending ? "disabled" : ""} />
+    <input id="camp-goal" placeholder="Например: напомнить о записи" value="${escapeHtml(draft.goal || "")}" ${roAttr()} ${pending ? "disabled" : ""} />
     <p class="hint">К чему должен привести разговор</p>
     <label>Сведения</label>
-    <textarea id="camp-details" rows="5" placeholder="Что важно сказать абоненту" ${roAttr()} ${pending ? "disabled" : ""}></textarea>
+    <textarea id="camp-details" rows="5" placeholder="Что важно сказать абоненту" ${roAttr()} ${pending ? "disabled" : ""}>${escapeHtml(draft.details || "")}</textarea>
     <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
-    <div class="error" id="camp-error" hidden></div>
+    <div class="error" id="camp-error" ${formErr ? "" : "hidden"}>${formErr ? escapeHtml(formErr) : ""}</div>
     ${pending ? `<p class="hint" id="camp-generate-pending"><strong>Собираем сценарий…</strong></p>` : ""}
     <div class="row-actions">
       <button class="btn" type="submit" ${roAttr()} ${pending ? "disabled" : ""}>Сохранить</button>
-      <a class="btn secondary" href="#/cabinet/campaigns" id="cancel-new-campaign" style="display:inline-block">Отмена</a>
+      <a class="btn secondary" href="#/cabinet/campaigns" id="cancel-new-campaign">Отмена</a>
     </div>
   </form>`;
 }
@@ -2928,16 +2932,19 @@ function bindCampaignForms() {
       e.preventDefault();
       if (locked() || state.ui.generatePending) return;
       const goal = document.getElementById("camp-goal").value.trim();
-      const err = document.getElementById("camp-error");
-      if (!goal) {
-        err.hidden = false;
-        err.textContent = "Опишите цель звонка";
-        return;
-      }
       const details = document.getElementById("camp-details").value;
       const name = document.getElementById("camp-name").value.trim();
+      state.ui.newCampaignDraft = { name, goal, details };
+      state.ui.newCampaignError = null;
+      if (!goal) {
+        state.ui.newCampaignError = "Опишите цель звонка";
+        flash("Опишите цель звонка", "error");
+        render();
+        return;
+      }
       try {
         let camp;
+        let scenarioAssembled = !hasApi();
         if (hasApi()) {
           state.ui.generatePending = true;
           state.ui.generateError = null;
@@ -2947,15 +2954,24 @@ function bindCampaignForms() {
             session: state.session,
             body: { goal, details },
           });
-          camp = mapCampaignFromApi(created, { name });
-          const generated = await apiFetch(
-            `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario/generate`,
-            {
-              method: "POST",
-              session: state.session,
+          camp = mapCampaignFromApi(created, { name, goal, details });
+          try {
+            const generated = await apiFetch(
+              `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario/generate`,
+              {
+                method: "POST",
+                session: state.session,
+              }
+            );
+            Object.assign(camp, mapCampaignFromApi(generated, camp));
+            scenarioAssembled = true;
+          } catch (genEx) {
+            const code = genEx?.code;
+            if (isGenerateErrorCode(code)) {
+              state.ui.generateError = errorMessage(code);
             }
-          );
-          Object.assign(camp, mapCampaignFromApi(generated, camp));
+            flash(errorMessage(code), "error");
+          }
           state.ui.generatePending = false;
         } else {
           camp = emptyCampaign({
@@ -2972,12 +2988,19 @@ function bindCampaignForms() {
         persistCampaigns();
         setActiveCampaignId(camp.id);
         state.ui.showNewCampaign = false;
-        flash(hasApi() ? "Кампания создана, сценарий собран" : "Кампания создана");
+        state.ui.newCampaignDraft = { name: "", goal: "", details: "" };
+        state.ui.newCampaignError = null;
+        if (scenarioAssembled) {
+          flash(hasApi() ? "Кампания создана, сценарий собран" : "Кампания создана");
+        } else if (!state.uiFlash || state.uiFlash.kind !== "error") {
+          flash("Кампания создана");
+        }
         navigate(`/cabinet/campaigns/${camp.id}`);
       } catch (ex) {
         state.ui.generatePending = false;
-        err.hidden = false;
-        err.textContent = errorMessage(ex?.code);
+        const msg = errorMessage(ex?.code);
+        state.ui.newCampaignError = msg;
+        flash(msg, "error");
         render();
       }
     };
