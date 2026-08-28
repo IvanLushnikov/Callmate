@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=24";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=26";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -123,6 +123,7 @@ const state = {
     gateErrors: [],
     statusExpandKey: null,
     scheduleDrawerOpen: false,
+    launchReasonsDrawerOpen: false,
     contactStatusFilter: "all",
     contactOutcomeFilter: "all",
     generatePending: false,
@@ -813,7 +814,10 @@ function ensureVerdicts(camp) {
 }
 
 function cabinetBody(parsed) {
-  if (parsed.page !== "workspace") state.ui.scheduleDrawerOpen = false;
+  if (parsed.page !== "workspace") {
+    state.ui.scheduleDrawerOpen = false;
+    state.ui.launchReasonsDrawerOpen = false;
+  }
   if (parsed.page === "integrations") return sectionTelephony();
   if (parsed.page === "analytics") return pageAnalytics();
   if (parsed.page === "tariffs") return pageTariffs();
@@ -858,15 +862,15 @@ function pageCampaignList() {
     )
     .join("");
 
-  return `<section class="flow-section campaigns-list desk-block" id="sec-campaign">
-    <div class="campaigns-head">
+  return `<section class="campaigns-list" id="sec-campaign">
+    <div class="campaigns-toolbar">
       <div class="campaigns-head-copy">
         <h2>Кампании</h2>
         <p class="hint campaigns-head-sub">От цели до обзвона в одном месте</p>
       </div>
       <div class="campaigns-head-action">${createBtn}</div>
     </div>
-    <div class="panel wide panel-fit desk-table-surface">
+    <div class="campaigns-table-surface">
       <table class="data data-camps">
         <thead><tr><th>Название</th><th>Состояние</th><th>Цель</th><th>Номеров</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -1146,61 +1150,69 @@ function readinessStripHtml(camp) {
     !locked();
 
   let readyTitle = "Готово";
-  let readyBody = dialActionsHtml(camp);
+  let readyBody = "";
   let readyClass = "ready-ok";
   if (camp.dial_state === "running") {
     readyTitle = "Идёт обзвон";
-    readyBody = dialActionsHtml(camp);
+    readyBody = `<p class="ready-hint">Текущий разговор закончим. Новые не начнём</p>`;
     readyClass = "ready-ok";
   } else if (camp.dial_state === "paused") {
     readyTitle = "На паузе";
-    readyBody = dialActionsHtml(camp);
+    readyBody = `<p class="ready-hint">Текущий разговор закончим. Новые не начнём</p>`;
     readyClass = "ready-warn";
   } else if (!canLaunch) {
-    readyTitle = "Запуск";
+    readyTitle = reasons.length ? "Нельзя запустить" : "Запуск";
     const shown = reasons.slice(0, 2);
     const rest = reasons.length - shown.length;
-    const first = shown[0];
-    const more = shown.slice(1);
-    readyBody = first
-      ? `<div class="ready-cta-wrap">
-          ${reasonCtaHtml(first)}
-          ${
-            more.length
-              ? `<div class="ready-reasons">${more.map((r) => reasonLinkHtml(r)).join("")}</div>`
-              : ""
-          }
-          ${rest > 0 ? `<p class="ready-hint">ещё ${rest}</p>` : ""}
-        </div>`
+    readyBody = shown.length
+      ? `<div class="ready-reasons">${shown.map((r) => reasonLinkHtml(r)).join("")}${
+          rest > 0
+            ? `<button type="button" class="ready-reason ready-more" id="launch-reasons-open">ещё ${rest}</button>`
+            : ""
+        }</div>`
       : `<p class="ready-hint">Нельзя запустить</p>`;
     readyClass = "ready-warn";
   }
 
   return `<div class="ready-strip" id="sec-ops">
-    <div class="ready-main ${readyClass}" id="sec-launch">
-      <div class="ready-state">
-        <span class="ready-kicker">Запуск</span>
-        <strong class="ready-title">${escapeHtml(readyTitle)}</strong>
-      </div>
-      <div class="ready-next">${readyBody}</div>
-    </div>
-    <div class="ready-meta">
-      <a class="ready-meta-item" href="#/cabinet/integrations" id="sec-telephony-summary">
-        <span class="ready-meta-label">Телефония</span>
-        <span class="ready-meta-value">${escapeHtml(telLabel)}</span>
-      </a>
-      <div class="ready-meta-wrap" id="sec-schedule">
-        <button class="ready-meta-item" type="button" id="schedule-open">
-          <span class="ready-meta-label">Когда звоним</span>
-          <span class="ready-meta-value">${escapeHtml(schOk ? schPreview : schStatus)}</span>
-        </button>
-      </div>
-      <button class="ready-meta-item" type="button" data-jump="sec-contacts" id="sec-ops-numbers">
-        <span class="ready-meta-label">Номера</span>
-        <span class="ready-meta-value">${escapeHtml(numbersValue)}</span>
-      </button>
+    <a class="ready-cell${telOk ? " ready-cell-ok" : " ready-cell-warn"}" href="#/cabinet/integrations" id="sec-telephony-summary">
+      <span class="ready-kicker-row"><span class="ready-kicker">Телефония</span><span class="ready-dot${telOk ? " ready-dot-ok" : " ready-dot-warn"}" aria-hidden="true"></span></span>
+      <span class="ready-cell-value">${escapeHtml(telLabel)}</span>
+      <span class="ready-cell-action">${telOk ? "Изменить" : "Настроить"}</span>
+    </a>
+    <button class="ready-cell${schOk ? " ready-cell-ok" : " ready-cell-warn"}" type="button" id="schedule-open">
+      <span class="ready-kicker-row"><span class="ready-kicker">Когда звоним</span><span class="ready-dot${schOk ? " ready-dot-ok" : " ready-dot-warn"}" aria-hidden="true"></span></span>
+      <span class="ready-cell-value" title="${escapeHtml(schOk ? schPreview : schStatus)}">${escapeHtml(schOk ? schPreview : schStatus)}</span>
+      <span class="ready-cell-action">${schOk ? "Изменить" : "Задать"}</span>
+    </button>
+    <button class="ready-cell${n ? " ready-cell-ok" : " ready-cell-warn"}" type="button" data-jump="sec-contacts" id="sec-ops-numbers">
+      <span class="ready-kicker-row"><span class="ready-kicker">Номера</span><span class="ready-dot${n ? " ready-dot-ok" : " ready-dot-warn"}" aria-hidden="true"></span></span>
+      <span class="ready-cell-value">${escapeHtml(numbersValue)}</span>
+      <span class="ready-cell-action">${n ? "К списку" : "Загрузить"}</span>
+    </button>
+    <div class="ready-cell ready-cell--launch ${readyClass}" id="sec-launch">
+      <span class="ready-kicker-row"><span class="ready-kicker">Запуск</span><span class="ready-dot${readyClass === "ready-ok" ? " ready-dot-ok" : " ready-dot-warn"}" aria-hidden="true"></span></span>
+      <strong class="ready-title">${escapeHtml(readyTitle)}</strong>
+      ${readyBody ? `<div class="ready-next">${readyBody}</div>` : ""}
     </div>
   </div>`;
+}
+
+function launchReasonsDrawerHtml(camp) {
+  if (!camp || !state.ui.launchReasonsDrawerOpen) return "";
+  const reasons = launchBlockReasons(camp);
+  return `<div class="drawer-backdrop" id="launch-reasons-backdrop"></div>
+    <aside class="drawer" id="launch-reasons-drawer" role="dialog" aria-labelledby="launch-reasons-title">
+      <header class="drawer-head">
+        <h2 id="launch-reasons-title">Почему нельзя запустить</h2>
+        <button class="btn ghost" type="button" id="launch-reasons-close" aria-label="Закрыть">×</button>
+      </header>
+      <div class="drawer-body launch-reasons-body">
+        <ul class="launch-reasons-list">${reasons
+          .map((r) => `<li>${reasonLinkHtml(r)}</li>`)
+          .join("")}</ul>
+      </div>
+    </aside>`;
 }
 
 function dialActionsHtml(camp) {
@@ -1209,32 +1221,23 @@ function dialActionsHtml(camp) {
     camp.dial_state === "draft" || camp.dial_state === "stopped"
       ? reasons.length === 0 && !locked()
       : false;
-  const drainHint =
-    '<p class="hint dial-drain-hint">Текущий разговор закончим. Новые звонки не начнём</p>';
   if (camp.dial_state === "running") {
-    return `<div class="launch-cluster">
+    return `<div class="launch-cluster launch-cluster-compact">
       <button class="btn" type="button" id="dial-pause" ${roAttr()}>Пауза</button>
       <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
-      ${drainHint}
       <p class="hint" id="dial-progress" hidden></p>
     </div>`;
   }
   if (camp.dial_state === "paused") {
-    return `<div class="launch-cluster">
+    return `<div class="launch-cluster launch-cluster-compact">
       <button class="btn" type="button" id="dial-resume" ${roAttr()}>Продолжить</button>
       <button class="btn secondary" type="button" id="dial-stop" ${roAttr()}>Стоп</button>
-      ${drainHint}
       <p class="hint" id="dial-progress" hidden></p>
     </div>`;
   }
   const disabled = !canStart || locked();
-  const why =
-    disabled && reasons.length
-      ? `<div class="launch-why">${reasonLinkHtml(reasons[0])}</div>`
-      : "";
   return `<div class="launch-cluster">
       <button class="btn" type="button" id="dial-start" ${disabled ? "disabled" : ""}>Начать обзвон</button>
-      ${why}
       <p class="hint" id="dial-progress" hidden>Запускаем…</p>
     </div>`;
 }
@@ -1253,16 +1256,20 @@ function campaignWorkspace(camp) {
   const started = isStarted(camp);
   const weak = isWeakScenario(camp);
   return `<div class="workspace workspace-desk" data-camp="${escapeHtml(camp.id)}">
+    <div class="workspace-chrome">
     <header class="workspace-bar workspace-bar-desk">
       <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
-      <div class="workspace-toolbar-row">
+      <div class="workspace-command-row">
         <div class="workspace-heading">
           <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
           <span class="badge badge-quiet">${escapeHtml(dialLabel(camp.dial_state))}</span>
         </div>
         <a class="workspace-balance-chip hint" href="#/cabinet/tariffs">Баланс ${escapeHtml(String(state.companyBalance))} ₽ · ${escapeHtml(String(state.companyTariff))} ₽/мин</a>
+        <div class="workspace-actions">${dialActionsHtml(camp)}</div>
       </div>
     </header>
+    ${readinessStripHtml(camp)}
+    </div>
     <div id="stop-confirm" class="panel nested" hidden>
       <p>Остановить обзвон? Текущий разговор договорим</p>
       <div class="row-actions">
@@ -1300,18 +1307,22 @@ function campaignWorkspace(camp) {
     }
     ${locked() ? `<p class="hint workspace-locked-note">Аккаунт заблокирован</p>` : ""}
 
-    ${readinessStripHtml(camp)}
     ${scheduleDrawerHtml(camp)}
+    ${launchReasonsDrawerHtml(camp)}
 
     <div class="workspace-desk-body">
-      ${blockBotPreview(camp, weak, started)}
-      ${blockNumbers(camp)}
+      <div class="workspace-col workspace-col--main">
+        ${blockBotPreview(camp, weak, started)}
+        ${blockScenario(camp)}
+      </div>
+      <div class="workspace-col workspace-col--side">
+        ${blockNumbers(camp)}
+      </div>
     </div>
-    ${blockScenario(camp)}
 
     <section class="flow-section outcomes-section desk-section-compact" id="sec-analytics">
-      <h2>Итоги кампании</h2>
-      <div class="panel wide compact-outcomes">${blockCampaignAnalytics(camp)}</div>
+      <h2 class="section-title-bar">Итоги кампании</h2>
+      <div class="metrics-band">${blockCampaignAnalytics(camp)}</div>
     </section>
   </div>`;
 }
@@ -1376,7 +1387,7 @@ function blockBotPreview(camp, weak, started) {
 
   return `<section class="flow-section workspace-panel" id="sec-preview">
     <h2 class="section-title-bar">Робот так понял сценарий</h2>
-    <form class="panel wide preview-panel" id="preview-form">
+    <form class="preview-panel" id="preview-form">
       ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
       ${
         weak && !started
@@ -1550,7 +1561,7 @@ function sectionScenario(camp) {
       <h2 class="section-title-bar">Сценарий и этапы</h2>
       <p class="hint section-head-note">Можно править текст; ветки рисовать не нужно</p>
     </div>
-    <div class="panel wide scenario-panel">
+    <div class="scenario-panel">
       ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
       <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
       ${
@@ -1694,7 +1705,7 @@ function sectionContacts(camp) {
             ${open ? `<tr class="expand-row"><td colspan="4">${contactDrawerHtml(camp, r)}</td></tr>` : ""}`;
         })
         .join("")
-    : `<tr><td colspan="4"></td></tr>`;
+    : `<tr class="contacts-empty-row"><td colspan="4"><p class="hint contacts-empty">Загрузите контакты из Excel или CSV. Нужен столбец с телефоном</p></td></tr>`;
 
   const uploadZone = `<div class="upload-zone${contacts.length ? " upload-zone-quiet" : " upload-zone-empty"}${state.ui.contactsUploading ? " is-uploading" : ""}" id="upload-zone">
         <div class="upload-zone-main">
@@ -1742,10 +1753,10 @@ function sectionContacts(camp) {
 
   return `<section class="flow-section workspace-panel" id="sec-contacts">
     <h2 class="section-title-bar">Номера</h2>
-    <div class="panel wide contacts-panel">
+    <div class="contacts-panel">
       ${reloadHint}
-      ${listBlock}
       ${uploadZone}
+      ${listBlock}
       ${
         started && contacts.length
           ? `<p class="hint">Серого статуса нет: пока вы не подтвердите догрузку, новые номера в обзвон не попадут</p>`
@@ -3194,6 +3205,22 @@ function bindCampaignForms() {
   if (scheduleDone) scheduleDone.onclick = closeSchedule;
   const scheduleBackdrop = document.getElementById("schedule-drawer-backdrop");
   if (scheduleBackdrop) scheduleBackdrop.onclick = closeSchedule;
+
+  const openLaunchReasons = document.getElementById("launch-reasons-open");
+  if (openLaunchReasons) {
+    openLaunchReasons.onclick = () => {
+      state.ui.launchReasonsDrawerOpen = true;
+      render();
+    };
+  }
+  const closeLaunchReasons = () => {
+    state.ui.launchReasonsDrawerOpen = false;
+    render();
+  };
+  const launchReasonsClose = document.getElementById("launch-reasons-close");
+  if (launchReasonsClose) launchReasonsClose.onclick = closeLaunchReasons;
+  const launchReasonsBackdrop = document.getElementById("launch-reasons-backdrop");
+  if (launchReasonsBackdrop) launchReasonsBackdrop.onclick = closeLaunchReasons;
 }
 
 function workspaceCampaign() {
