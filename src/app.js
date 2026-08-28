@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=22";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=23";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -365,16 +365,16 @@ function appTabsHtml(activeTab, tabs = CABINET_TABS) {
 }
 
 function cabinetShell(activeTab, bodyHtml) {
-  return `<div class="page-shell">
-    <header class="page-topbar">
-      <p class="brand">CallMate</p>
+  return `<div class="page-shell page-shell-desk">
+    <header class="page-topbar page-topbar-desk">
+      <p class="brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
       ${appTabsHtml(activeTab)}
       <div class="page-topbar-actions">
         ${themeControls()}
         <button class="btn secondary" id="logout" type="button">Выйти</button>
       </div>
     </header>
-    <main class="page">
+    <main class="page page-desk">
       ${impersonateBanner()}
       ${lockedBanner()}
       ${flashHtml()}
@@ -834,12 +834,14 @@ function pageCampaignList() {
   const createBtn = locked()
     ? `<button class="btn" type="button" disabled>Создать кампанию</button>
        <p class="hint">Аккаунт заблокирован</p>`
-    : `<a class="btn" href="#/cabinet/campaigns/new" style="display:inline-block">Создать кампанию</a>`;
+    : `<a class="btn" href="#/cabinet/campaigns/new">Создать кампанию</a>`;
 
   if (!state.campaigns.length) {
-    return `<section class="campaigns-empty" id="sec-campaign">
-      <div class="empty-state">
-        <p>Нет кампаний. Создайте первую</p>
+    return `<section class="campaigns-empty desk-scene" id="sec-campaign">
+      <div class="empty-state empty-state-hero">
+        <div class="empty-state-mark" aria-hidden="true"></div>
+        <h2 class="empty-state-title">Пока нет кампаний</h2>
+        <p class="empty-state-lead">Создайте первую — от цели до обзвона</p>
         ${createBtn}
       </div>
     </section>`;
@@ -856,12 +858,15 @@ function pageCampaignList() {
     )
     .join("");
 
-  return `<section class="flow-section campaigns-list" id="sec-campaign">
+  return `<section class="flow-section campaigns-list desk-block" id="sec-campaign">
     <div class="campaigns-head">
-      <h2>Кампании</h2>
-      ${createBtn}
+      <div class="campaigns-head-copy">
+        <h2>Кампании</h2>
+        <p class="hint campaigns-head-sub">От цели до обзвона в одном месте</p>
+      </div>
+      <div class="campaigns-head-action">${createBtn}</div>
     </div>
-    <div class="panel wide panel-fit">
+    <div class="panel wide panel-fit desk-table-surface">
       <table class="data data-camps">
         <thead><tr><th>Название</th><th>Состояние</th><th>Цель</th><th>Номеров</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -878,7 +883,7 @@ function pageCampaignNew() {
       <div class="panel wide"><p class="hint">Аккаунт заблокирован</p></div>
     </section>`;
   }
-  return `<section class="flow-section create-campaign" id="sec-campaign">
+  return `<section class="flow-section create-campaign desk-block" id="sec-campaign">
     <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
     <h2>Новая кампания</h2>
     ${newCampaignFormInline()}
@@ -1222,8 +1227,8 @@ function dialActionsHtml(camp) {
 function campaignWorkspace(camp) {
   const started = isStarted(camp);
   const weak = isWeakScenario(camp);
-  return `<div class="workspace" data-camp="${escapeHtml(camp.id)}">
-    <header class="workspace-bar">
+  return `<div class="workspace workspace-desk" data-camp="${escapeHtml(camp.id)}">
+    <header class="workspace-bar workspace-bar-desk">
       <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
       <div class="workspace-heading">
         <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
