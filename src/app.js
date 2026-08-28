@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=23";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=24";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -883,10 +883,12 @@ function pageCampaignNew() {
       <div class="panel wide"><p class="hint">Аккаунт заблокирован</p></div>
     </section>`;
   }
-  return `<section class="flow-section create-campaign desk-block" id="sec-campaign">
-    <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
-    <h2>Новая кампания</h2>
-    ${newCampaignFormInline()}
+  return `<section class="flow-section create-campaign desk-scene desk-scene-form" id="sec-campaign">
+    <div class="desk-form-card">
+      <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
+      <h2>Новая кампания</h2>
+      ${newCampaignFormInline()}
+    </div>
   </section>`;
 }
 
@@ -990,42 +992,55 @@ function pageAnalytics() {
       </table>`
     : `<p class="hint">Пока нет кампаний</p>`;
 
-  return `<section class="flow-section" id="sec-analytics">
-    <h2>Аналитика</h2>
-    <div class="panel wide">
-      <h3>Выбранная кампания</h3>
-      ${camp ? blockCampaignAnalytics(camp) : `<p>Пока нет данных по кампании</p>`}
-      <h3 style="margin-top:1.25rem">Все кампании</h3>
+  return `<section class="flow-section desk-block" id="sec-analytics">
+    <h2 class="section-title-bar">Аналитика</h2>
+    <div class="panel wide desk-panel-inner">
+      <h3 class="desk-subhead">Выбранная кампания</h3>
+      ${camp ? blockCampaignAnalytics(camp) : `<p class="hint">Пока нет данных по кампании</p>`}
+      <h3 class="desk-subhead">Все кампании</h3>
       ${listMetrics}
     </div>
   </section>`;
 }
 
+function analyticsMetric(label, value, hint = "") {
+  return `<div class="metric-card">
+    <span class="metric-label">${escapeHtml(label)}</span>
+    <strong class="metric-value">${escapeHtml(String(value))}</strong>
+    ${hint ? `<span class="hint metric-hint">${escapeHtml(hint)}</span>` : ""}
+  </div>`;
+}
+
 function blockCampaignAnalytics(camp) {
   const a = camp.analytics;
   if (!a) {
-    return `<p>Пока нет данных по кампании</p>
-      <button class="btn secondary" type="button" id="export-excel">Скачать Excel</button>
+    return `<div class="metrics-grid metrics-grid-compact">
+      ${analyticsMetric("Звонков", "0")}
+      ${analyticsMetric("До цели", "0", "По итогам разговора")}
+      ${analyticsMetric("Минуты", "0")}
+      ${analyticsMetric("Стоимость", "0 ₽", `Тариф ${state.companyTariff} ₽/мин`)}
+    </div>
+      <div class="row-actions">
+        <button class="btn secondary" type="button" id="export-excel">Скачать Excel</button>
+      </div>
       <p class="hint">Нули до звонков допустимы — можно выгрузить пустой отчёт</p>
       <p class="hint" id="export-status" hidden></p>
       <div class="error" id="export-error" hidden></div>`;
   }
-  return `<div>
-      <p class="hint">${escapeHtml(camp.name || "Без названия")}</p>
-      <div>Звонков: ${escapeHtml(String(a.calls ?? a.calls_total ?? 0))}</div>
-      <div>Средняя длительность: ${escapeHtml(a.avgDuration || a.avg_duration || "—")}</div>
-      <div><strong>До цели</strong>: ${escapeHtml(String(a.goalReached ?? a.goal_reached ?? 0))}</div>
-      <p class="hint">По итогам разговора относительно цели кампании</p>
-      <div><strong>Минуты разговора</strong>: ${escapeHtml(String(a.minutes ?? a.minutes_total ?? 0))}</div>
-      <div><strong>Ваш тариф за минуту</strong>: ${escapeHtml(String(state.companyTariff))}</div>
-      <div><strong>Стоимость кампании</strong>: ${escapeHtml(String(a.cost ?? a.cost_rub ?? (a.minutes || 0) * state.companyTariff))}</div>
-      <p class="hint">Стоимость = минуты × ваш тариф</p>
+  const cost = a.cost ?? a.cost_rub ?? (a.minutes || 0) * state.companyTariff;
+  return `<div class="metrics-grid">
+      ${analyticsMetric("Звонков", a.calls ?? a.calls_total ?? 0)}
+      ${analyticsMetric("Средняя длительность", a.avgDuration || a.avg_duration || "—")}
+      ${analyticsMetric("До цели", a.goalReached ?? a.goal_reached ?? 0, "По итогам разговора")}
+      ${analyticsMetric("Минуты разговора", a.minutes ?? a.minutes_total ?? 0)}
+      ${analyticsMetric("Тариф за минуту", `${state.companyTariff} ₽`)}
+      ${analyticsMetric("Стоимость", `${cost} ₽`, "Минуты × тариф")}
+    </div>
       <div class="row-actions">
         <button class="btn" type="button" id="export-excel">Скачать Excel</button>
       </div>
       <p class="hint" id="export-status" hidden></p>
-      <div class="error" id="export-error" hidden></div>
-    </div>`;
+      <div class="error" id="export-error" hidden></div>`;
 }
 
 function telephonyStatusLine() {
@@ -1131,18 +1146,18 @@ function readinessStripHtml(camp) {
     !locked();
 
   let readyTitle = "Готово";
-  let readyBody = `<p class="ready-hint">Можно начинать</p>`;
+  let readyBody = dialActionsHtml(camp);
   let readyClass = "ready-ok";
   if (camp.dial_state === "running") {
     readyTitle = "Идёт обзвон";
-    readyBody = `<p class="ready-hint">Текущий разговор закончим. Новые звонки не начнём</p>`;
+    readyBody = dialActionsHtml(camp);
     readyClass = "ready-ok";
   } else if (camp.dial_state === "paused") {
     readyTitle = "На паузе";
-    readyBody = `<p class="ready-hint">Текущий разговор закончим. Новые звонки не начнём</p>`;
+    readyBody = dialActionsHtml(camp);
     readyClass = "ready-warn";
   } else if (!canLaunch) {
-    readyTitle = "Нельзя";
+    readyTitle = "Запуск";
     const shown = reasons.slice(0, 2);
     const rest = reasons.length - shown.length;
     const first = shown[0];
@@ -1224,17 +1239,29 @@ function dialActionsHtml(camp) {
     </div>`;
 }
 
+function deskAccordion(title, bodyHtml, { open = true, hint = "" } = {}) {
+  return `<details class="desk-accordion"${open ? " open" : ""}>
+    <summary class="desk-accordion-summary">
+      <span class="desk-accordion-title">${escapeHtml(title)}</span>
+      ${hint ? `<span class="hint desk-accordion-hint">${escapeHtml(hint)}</span>` : ""}
+    </summary>
+    <div class="desk-accordion-body">${bodyHtml}</div>
+  </details>`;
+}
+
 function campaignWorkspace(camp) {
   const started = isStarted(camp);
   const weak = isWeakScenario(camp);
   return `<div class="workspace workspace-desk" data-camp="${escapeHtml(camp.id)}">
     <header class="workspace-bar workspace-bar-desk">
       <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
-      <div class="workspace-heading">
-        <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
-        <span class="badge badge-quiet">${escapeHtml(dialLabel(camp.dial_state))}</span>
+      <div class="workspace-toolbar-row">
+        <div class="workspace-heading">
+          <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
+          <span class="badge badge-quiet">${escapeHtml(dialLabel(camp.dial_state))}</span>
+        </div>
+        <a class="workspace-balance-chip hint" href="#/cabinet/tariffs">Баланс ${escapeHtml(String(state.companyBalance))} ₽ · ${escapeHtml(String(state.companyTariff))} ₽/мин</a>
       </div>
-      <div class="workspace-actions">${dialActionsHtml(camp)}</div>
     </header>
     <div id="stop-confirm" class="panel nested" hidden>
       <p>Остановить обзвон? Текущий разговор договорим</p>
@@ -1271,17 +1298,18 @@ function campaignWorkspace(camp) {
     </div>`
         : ""
     }
-    ${locked() ? `<p class="hint">Аккаунт заблокирован</p>` : ""}
-    <p class="hint meta-line"><a href="#/cabinet/tariffs">Баланс: ${escapeHtml(String(state.companyBalance))} ₽ · тариф ${escapeHtml(String(state.companyTariff))} ₽/мин</a></p>
+    ${locked() ? `<p class="hint workspace-locked-note">Аккаунт заблокирован</p>` : ""}
 
     ${readinessStripHtml(camp)}
     ${scheduleDrawerHtml(camp)}
 
-    ${blockBotPreview(camp, weak, started)}
-    ${blockNumbers(camp)}
+    <div class="workspace-desk-body">
+      ${blockBotPreview(camp, weak, started)}
+      ${blockNumbers(camp)}
+    </div>
     ${blockScenario(camp)}
 
-    <section class="flow-section outcomes-section" id="sec-analytics">
+    <section class="flow-section outcomes-section desk-section-compact" id="sec-analytics">
       <h2>Итоги кампании</h2>
       <div class="panel wide compact-outcomes">${blockCampaignAnalytics(camp)}</div>
     </section>
@@ -1297,8 +1325,57 @@ function blockBotPreview(camp, weak, started) {
   const hasServerPreview = Boolean(preview.greeting || preview.says || preview.replies || preview.tone);
   const pending = state.ui.generatePending;
   const genErr = state.ui.generateError;
-  return `<section class="flow-section" id="sec-preview">
-    <h2>Робот так понял сценарий</h2>
+  const goalBlock = `<div class="preview-slice preview-slice-context preview-slice-compact">
+          <div class="preview-context-main">
+            <div class="preview-field preview-field-full">
+              <label for="preview-name">Название</label>
+              <input id="preview-name" value="${escapeHtml(camp.name || "")}" ${dis} />
+              <p class="hint">Пустое имя — не мешает запуску</p>
+            </div>
+            <div class="preview-field preview-field-full">
+              <label for="preview-goal">Цель звонка</label>
+              <textarea id="preview-goal" rows="2" ${dis} placeholder="Например: напомнить о записи">${escapeHtml(goalVal)}</textarea>
+              <p class="hint">К чему должен привести разговор</p>
+            </div>
+            <div class="preview-field preview-field-full">
+              <label for="preview-details">Сведения</label>
+              <textarea id="preview-details" rows="4" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
+              <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
+            </div>
+          </div>
+          <aside class="goal-verdicts preview-verdicts">
+            <h3>Возможные итоги разговора</h3>
+            <p class="hint">Система собрала список по цели. Менять его нельзя</p>
+            ${
+              verdicts.length
+                ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(typeof v === "string" ? v : v.label || v.id || JSON.stringify(v))}</li>`).join("")}</ul>`
+                : `<p class="hint">Пока нет итогов — сохраните цель и сведения</p>`
+            }
+          </aside>
+        </div>`;
+
+  const voiceBlock = `<div class="preview-edit-grid preview-edit-grid-compact">
+            <div class="preview-field">
+              <label for="preview-greeting">Приветствие</label>
+              <textarea id="preview-greeting" rows="3" ${dis} placeholder="Здравствуйте!">${escapeHtml(preview.greeting)}</textarea>
+            </div>
+            <div class="preview-field">
+              <label for="preview-says">Что говорит</label>
+              <textarea id="preview-says" rows="3" ${dis} placeholder="Суть сообщения">${escapeHtml(preview.says)}</textarea>
+            </div>
+            <div class="preview-field">
+              <label for="preview-replies">Как отвечает</label>
+              <textarea id="preview-replies" rows="3" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(preview.replies)}</textarea>
+            </div>
+            <div class="preview-field">
+              <label for="preview-tone">Тон</label>
+              <textarea id="preview-tone" rows="3" ${dis} placeholder="Спокойно и по делу">${escapeHtml(preview.tone)}</textarea>
+              <p class="hint">Без давления оформить любой ценой</p>
+            </div>
+          </div>`;
+
+  return `<section class="flow-section workspace-panel" id="sec-preview">
+    <h2 class="section-title-bar">Робот так понял сценарий</h2>
     <form class="panel wide preview-panel" id="preview-form">
       ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
       ${
@@ -1320,64 +1397,15 @@ function blockBotPreview(camp, weak, started) {
           ? `<p class="hint" id="preview-empty">Сначала сохраните цель и сведения — тогда появится, как робот понял сценарий.</p>`
           : ""
       }
-      <p class="hint preview-lead">Можно править каждый блок. Если имени нет — робот его не говорит</p>
 
-      <div class="preview-prompt">
-        <div class="preview-slice preview-slice-context">
-          <div class="preview-context-main">
-            <div class="preview-field preview-field-full">
-              <label for="preview-name">Название</label>
-              <input id="preview-name" value="${escapeHtml(camp.name || "")}" ${dis} />
-              <p class="hint">Пустое имя — не мешает запуску</p>
-            </div>
-            <div class="preview-field preview-field-full">
-              <label for="preview-goal">Цель звонка</label>
-              <textarea id="preview-goal" rows="2" ${dis} placeholder="Например: напомнить о записи">${escapeHtml(goalVal)}</textarea>
-              <p class="hint">К чему должен привести разговор</p>
-            </div>
-            <div class="preview-field preview-field-full">
-              <label for="preview-details">Сведения</label>
-              <textarea id="preview-details" rows="5" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
-              <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
-            </div>
-          </div>
-          <aside class="goal-verdicts preview-verdicts">
-            <h3>Возможные итоги разговора</h3>
-            <p class="hint">Система собрала список по цели. Менять его нельзя</p>
-            ${
-              verdicts.length
-                ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(typeof v === "string" ? v : v.label || v.id || JSON.stringify(v))}</li>`).join("")}</ul>`
-                : `<p class="hint">Пока нет итогов — сохраните цель и сведения</p>`
-            }
-          </aside>
-        </div>
-
-        <div class="preview-slice">
-          <div class="preview-edit-grid">
-            <div class="preview-field">
-              <label for="preview-greeting">Приветствие</label>
-              <textarea id="preview-greeting" rows="4" ${dis} placeholder="Здравствуйте!">${escapeHtml(preview.greeting)}</textarea>
-            </div>
-            <div class="preview-field">
-              <label for="preview-says">Что говорит</label>
-              <textarea id="preview-says" rows="4" ${dis} placeholder="Суть сообщения">${escapeHtml(preview.says)}</textarea>
-            </div>
-            <div class="preview-field">
-              <label for="preview-replies">Как отвечает</label>
-              <textarea id="preview-replies" rows="5" ${dis} placeholder="Как реагирует на ответы">${escapeHtml(preview.replies)}</textarea>
-            </div>
-            <div class="preview-field">
-              <label for="preview-tone">Тон</label>
-              <textarea id="preview-tone" rows="4" ${dis} placeholder="Спокойно и по делу">${escapeHtml(preview.tone)}</textarea>
-              <p class="hint">Без давления оформить любой ценой</p>
-            </div>
-          </div>
-        </div>
+      <div class="preview-prompt preview-prompt-compact">
+        ${deskAccordion("Цель и сведения", goalBlock, { open: true, hint: "Название, цель, контекст" })}
+        ${deskAccordion("Как звучит робот", voiceBlock, { open: hasServerPreview, hint: "Приветствие, реплики, тон" })}
       </div>
       ${
         started || locked()
           ? `<p class="hint">${started ? "После старта превью только смотрим" : "Аккаунт заблокирован — правки недоступны"}</p>`
-          : `<div class="row-actions">
+          : `<div class="row-actions preview-save-row">
               <button class="btn" type="submit" id="preview-save-btn" ${pending ? "disabled" : ""}>Сохранить</button>
               <p class="hint">Сохранение цели и сведений заново соберёт, как звучит робот, и этапы.</p>
               <p class="hint ok-line" id="preview-ok" hidden>Сценарий собран</p>
@@ -1517,10 +1545,10 @@ function sectionScenario(camp) {
         ? [{ goal: camp.goal, input: "Приветствие", output: "Переход к сути" }]
         : [];
   const attrs = camp.columns || [];
-  return `<section class="flow-section" id="sec-scenario">
-    <div class="section-head">
-      <h2>Сценарий и этапы</h2>
-      <p class="hint">Можно править текст; ветки рисовать не нужно</p>
+  return `<section class="flow-section workspace-panel" id="sec-scenario">
+    <div class="section-head section-head-bar">
+      <h2 class="section-title-bar">Сценарий и этапы</h2>
+      <p class="hint section-head-note">Можно править текст; ветки рисовать не нужно</p>
     </div>
     <div class="panel wide scenario-panel">
       ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
@@ -1712,8 +1740,8 @@ function sectionContacts(camp) {
       </div>`
     : "";
 
-  return `<section class="flow-section" id="sec-contacts">
-    <h2>Номера</h2>
+  return `<section class="flow-section workspace-panel" id="sec-contacts">
+    <h2 class="section-title-bar">Номера</h2>
     <div class="panel wide contacts-panel">
       ${reloadHint}
       ${listBlock}
