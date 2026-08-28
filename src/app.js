@@ -29,6 +29,25 @@ const ERROR_BY_CODE = {
   sip_unknown: "Не удалось подключить телефонию. Попробуйте ещё раз",
 };
 
+const ARCHETYPE_CARDS = [
+  { id: "", title: "Подберём сами", hint: "По цели и сведениям", auto: true },
+  { id: "guide_task", title: "Помощь в приложении", hint: "Проведём по шагам интеграции или настройки" },
+  { id: "feedback_interview", title: "Опрос после визита", hint: "Спросим, что понравилось и что улучшить" },
+  { id: "notify_support", title: "Сообщить и ответить", hint: "Донесём факт и ответим на вопросы" },
+  { id: "winback_feedback", title: "Вернуть клиента", hint: "Узнаем барьеры и мягко напомним о продукте" },
+  { id: "offer_educational", title: "Рассказать об оффере", hint: "Курсы, условия, ссылка на сайт" },
+];
+
+const STAGE_KIND_LABEL = {
+  open: "Контакт",
+  close: "Завершение",
+  guide_step: "Пошаговая помощь",
+  interview: "Вопрос",
+  notify_deliver: "Уведомление",
+  notify_qa: "Вопросы",
+  offer: "Оффер",
+};
+
 const DAYS = [
   { id: "mon", label: "Пн" },
   { id: "tue", label: "Вт" },
@@ -137,7 +156,7 @@ const state = {
     contactOutcomeFilter: "all",
     generatePending: false,
     generateError: null,
-    newCampaignDraft: { name: "", goal: "", details: "" },
+    newCampaignDraft: { name: "", goal: "", details: "", archetype: "", archetype_locked: false, knowledge_pack: {} },
     newCampaignError: null,
     saveRebuildOpen: false,
     pendingPreviewSave: null,
@@ -876,6 +895,10 @@ function emptyCampaign(partial = {}) {
     dial_state: "draft",
     goal: "",
     details: "",
+    archetype: "",
+    archetype_locked: false,
+    knowledge_pack: {},
+    generate_warnings: [],
     preview: { greeting: "", says: "", replies: "", tone: "" },
     scenarioText: "",
     stages: [],
@@ -917,6 +940,15 @@ function mapCampaignFromApi(c, existing = {}) {
     contacts: existing.contacts || [],
     columns: existing.columns || [],
     preview: mapPreviewFromApi(c.preview, existing.preview),
+    archetype: c.archetype != null ? c.archetype : existing.archetype || "",
+    archetype_locked: c.archetype_locked != null ? Boolean(c.archetype_locked) : Boolean(existing.archetype_locked),
+    knowledge_pack:
+      c.knowledge_pack && typeof c.knowledge_pack === "object"
+        ? c.knowledge_pack
+        : existing.knowledge_pack || {},
+    generate_warnings: Array.isArray(c.generate_warnings)
+      ? c.generate_warnings
+      : existing.generate_warnings || [],
   });
 }
 
@@ -952,7 +984,7 @@ function verdictsForDisplay(camp) {
 }
 
 function isGenerateErrorCode(code) {
-  return code === "generate_failed" || code === "provider_down" || code === "weak_goal";
+  return code === "generate_failed" || code === "provider_down" || code === "weak_goal" || code === "pack_gaps_critical";
 }
 
 async function refreshCampaigns() {
@@ -2058,8 +2090,8 @@ function blockScenarioFlow(camp, weak, started) {
       ? `<div class="stages-compact">${stages
           .map(
             (s, i) => `<form class="stage-form-compact" data-idx="${i}">
-            <div class="stage-field">
-              <label>Цель этапа</label>
+            <div class="stage-field stage-field-head">
+              <label>Цель этапа ${stageKindBadge(s.kind)}</label>
               <input name="goal" value="${escapeHtml(s.goal || "")}" ${dis} />
             </div>
             <div class="stage-field">
@@ -2142,26 +2174,176 @@ function blockNumbers(camp) {
   return sectionContacts(camp);
 }
 
+
+function archetypeCardsHtml(selectedId, { locked = false, name = "archetype-pick" } = {}) {
+  const cur = selectedId == null ? "" : String(selectedId);
+  return `<div class="archetype-grid" role="listbox" aria-label="Тип звонка">
+    ${ARCHETYPE_CARDS.map((card) => {
+      const id = card.id || "";
+      const active = cur === id || (card.auto && !cur);
+      return `<button type="button" class="archetype-card${active ? " is-active" : ""}" data-archetype="${escapeHtml(id)}" data-archetype-name="${name}" ${locked ? "disabled" : ""}>
+        <span class="archetype-card-title">${escapeHtml(card.title)}</span>
+        <span class="archetype-card-hint">${escapeHtml(card.hint)}</span>
+      </button>`;
+    }).join("")}
+  </div>`;
+}
+
+function readKnowledgePackFromDom(archetype) {
+  const pack = {};
+  const lines = (id) =>
+    (document.getElementById(id)?.value || "")
+      .split("\n")
+      .map((x) => x.trim())
+      .filter(Boolean);
+  if (archetype === "guide_task") {
+    const steps = lines("pack-steps").map((instruction, i) => ({
+      id: `s${i + 1}`,
+      instruction,
+      verify_question: "",
+    }));
+    if (steps.length) pack.steps = steps;
+    const esc = lines("pack-escalation").map((say) => ({ when: "не знаем ответ", say }));
+    if (esc.length) pack.escalation = esc;
+  } else if (archetype === "feedback_interview") {
+    const topics = lines("pack-topics").map((question, i) => ({ id: `t${i + 1}`, question }));
+    if (topics.length) pack.interview_topics = topics;
+  } else if (archetype === "notify_support") {
+    const facts = lines("pack-facts").map((text, i) => ({ id: `f${i + 1}`, text }));
+    if (facts.length) pack.facts = facts;
+    const faqLines = lines("pack-faq");
+    const faq = [];
+    for (const line of faqLines) {
+      const [q, ...rest] = line.split("|");
+      if (q && rest.length) faq.push({ q: q.trim(), a: rest.join("|").trim() });
+    }
+    if (faq.length) pack.faq = faq;
+    const esc = lines("pack-escalation").map((say) => ({ when: "нет ответа в FAQ", say }));
+    if (esc.length) pack.escalation = esc;
+  } else if (archetype === "winback_feedback") {
+    const barriers = lines("pack-barriers");
+    if (barriers.length) pack.barriers_prompt = barriers;
+    const ctas = lines("pack-ctas").map((say) => ({ label: "cta", say }));
+    if (ctas.length) pack.ctas = ctas;
+  } else if (archetype === "offer_educational") {
+    const facts = lines("pack-facts").map((text, i) => ({ id: `f${i + 1}`, text }));
+    if (facts.length) pack.facts = facts;
+    const ctas = lines("pack-ctas").map((say) => ({ label: "cta", say }));
+    if (ctas.length) pack.ctas = ctas;
+  } else {
+    const facts = lines("pack-facts").map((text, i) => ({ id: `f${i + 1}`, text }));
+    if (facts.length) pack.facts = facts;
+  }
+  return pack;
+}
+
+function knowledgePackFormHtml(archetype, pack, { dis = "" } = {}) {
+  const p = pack || {};
+  const joinLines = (arr, mapFn) => (Array.isArray(arr) ? arr.map(mapFn).filter(Boolean).join("\n") : "");
+  if (!archetype) {
+    return `<p class="hint">Сначала выберите тип звонка — или оставьте «Подберём сами»</p>`;
+  }
+  let fields = "";
+  if (archetype === "guide_task") {
+    fields = `<label for="pack-steps">Шаги (по одному в строке)</label>
+      <textarea id="pack-steps" rows="4" ${dis} placeholder="Откройте раздел Партнёры">${escapeHtml(joinLines(p.steps, (x) => x.instruction || ""))}</textarea>
+      <label for="pack-escalation">Если робот не знает ответ</label>
+      <textarea id="pack-escalation" rows="2" ${dis}>${escapeHtml(joinLines(p.escalation, (x) => x.say || ""))}</textarea>`;
+  } else if (archetype === "feedback_interview") {
+    fields = `<label for="pack-topics">Темы опроса (по одной в строке)</label>
+      <textarea id="pack-topics" rows="4" ${dis}>${escapeHtml(joinLines(p.interview_topics, (x) => x.question || ""))}</textarea>`;
+  } else if (archetype === "notify_support") {
+    fields = `<label for="pack-facts">Факты для сообщения</label>
+      <textarea id="pack-facts" rows="3" ${dis}>${escapeHtml(joinLines(p.facts, (x) => x.text || ""))}</textarea>
+      <label for="pack-faq">FAQ (вопрос | ответ)</label>
+      <textarea id="pack-faq" rows="3" ${dis}>${escapeHtml(joinLines(p.faq, (x) => (x.q && x.a ? `${x.q} | ${x.a}` : "")))}</textarea>
+      <label for="pack-escalation">Эскалация</label>
+      <textarea id="pack-escalation" rows="2" ${dis}>${escapeHtml(joinLines(p.escalation, (x) => x.say || ""))}</textarea>`;
+  } else if (archetype === "winback_feedback") {
+    fields = `<label for="pack-barriers">Барьеры / вопросы</label>
+      <textarea id="pack-barriers" rows="3" ${dis}>${escapeHtml(joinLines(p.barriers_prompt, (x) => String(x)))}</textarea>
+      <label for="pack-ctas">Что предложить сказать</label>
+      <textarea id="pack-ctas" rows="2" ${dis}>${escapeHtml(joinLines(p.ctas, (x) => x.say || ""))}</textarea>`;
+  } else if (archetype === "offer_educational") {
+    fields = `<label for="pack-facts">Факты / условия</label>
+      <textarea id="pack-facts" rows="3" ${dis}>${escapeHtml(joinLines(p.facts, (x) => x.text || ""))}</textarea>
+      <label for="pack-ctas">CTA</label>
+      <textarea id="pack-ctas" rows="2" ${dis}>${escapeHtml(joinLines(p.ctas, (x) => x.say || ""))}</textarea>`;
+  } else {
+    fields = `<label for="pack-facts">Факты (необязательно)</label>
+      <textarea id="pack-facts" rows="3" ${dis}>${escapeHtml(joinLines(p.facts, (x) => x.text || ""))}</textarea>`;
+  }
+  return `<div class="knowledge-pack-form" id="knowledge-pack-form">
+    <p class="form-zone-sub">Контекст для робота</p>
+    <p class="hint">Заполните факты и шаги — робот не будет их выдумывать</p>
+    ${fields}
+  </div>`;
+}
+
+function packGapsBanner(camp) {
+  const warns = Array.isArray(camp?.generate_warnings) ? camp.generate_warnings : [];
+  const genErr = state.ui.generateError;
+  let html = "";
+  if (genErr) {
+    html += `<div class="error pack-gaps-error" role="alert">${escapeHtml(genErr)}</div>`;
+  }
+  if (warns.length) {
+    html += `<div class="hint pack-gaps-warn" role="status">Не хватает данных для точного сценария: ${escapeHtml(warns.join("; "))}</div>`;
+  }
+  return html;
+}
+
+function stageKindBadge(kind) {
+  if (!kind) return "";
+  const label = STAGE_KIND_LABEL[kind] || kind;
+  return `<span class="stage-kind-badge" title="Тип этапа задаётся системой">${escapeHtml(label)}</span>`;
+}
+
+function clientPackGapsBlock(archetype, pack) {
+  if (archetype === "guide_task") {
+    const steps = pack?.steps;
+    if (!Array.isArray(steps) || !steps.length) {
+      return "Чтобы помочь в приложении, добавьте хотя бы один шаг";
+    }
+  }
+  if (archetype === "notify_support") {
+    const facts = pack?.facts;
+    const esc = pack?.escalation;
+    if (!Array.isArray(facts) || !facts.length || !Array.isArray(esc) || !esc.length) {
+      return "Добавьте факты уведомления и текст эскалации";
+    }
+  }
+  return "";
+}
+
 function newCampaignFormInline() {
   const pending = state.ui.generatePending;
-  const draft = state.ui.newCampaignDraft || { name: "", goal: "", details: "" };
+  const draft = state.ui.newCampaignDraft || { name: "", goal: "", details: "", archetype: "", archetype_locked: false, knowledge_pack: {} };
   const formErr = state.ui.newCampaignError;
+  const arch = draft.archetype || "";
+  const dis = `${roAttr()} ${pending ? "disabled" : ""}`;
   return `<form class="desk-form flow-fields create-campaign-form" id="new-campaign-form">
     <div class="preview-field preview-field-full">
       <label for="camp-name">Название</label>
-      <input id="camp-name" value="${escapeHtml(draft.name || "")}" ${roAttr()} ${pending ? "disabled" : ""} />
+      <input id="camp-name" value="${escapeHtml(draft.name || "")}" ${dis} />
       <p class="hint">Пустое имя — не мешает запуску</p>
     </div>
     <div class="preview-field preview-field-full">
+      <label>Тип звонка</label>
+      ${archetypeCardsHtml(arch, { locked: pending })}
+      <p class="hint">Можно выбрать тип или оставить подбор системе</p>
+    </div>
+    <div class="preview-field preview-field-full">
       <label for="camp-goal">Цель звонка</label>
-      <input id="camp-goal" placeholder="Например: напомнить о записи" value="${escapeHtml(draft.goal || "")}" ${roAttr()} ${pending ? "disabled" : ""} />
+      <input id="camp-goal" placeholder="Например: напомнить о записи" value="${escapeHtml(draft.goal || "")}" ${dis} />
       <p class="hint">К чему должен привести разговор</p>
     </div>
     <div class="preview-field preview-field-full">
       <label for="camp-details">Сведения</label>
-      <textarea id="camp-details" rows="5" placeholder="Что важно сказать абоненту" ${roAttr()} ${pending ? "disabled" : ""}>${escapeHtml(draft.details || "")}</textarea>
+      <textarea id="camp-details" rows="5" placeholder="Что важно сказать абоненту" ${dis}>${escapeHtml(draft.details || "")}</textarea>
       <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
     </div>
+    ${knowledgePackFormHtml(arch, draft.knowledge_pack || {}, { dis })}
     <div class="error" id="camp-error" ${formErr ? "" : "hidden"}>${formErr ? escapeHtml(formErr) : ""}</div>
     ${pending ? `<p class="hint" id="camp-generate-pending"><strong>Собираем сценарий…</strong></p>` : ""}
     <div class="flow-save-bar">
@@ -2650,6 +2832,11 @@ function contactDrawerHtml(camp, contact) {
       contact.verdict ? escapeHtml(contact.verdict) : "Вердикта нет — разговора не было"
     }</p>
     <p class="hint">Вердикт — про цель кампании, не про статус</p>
+    ${
+      contact.insights_summary
+        ? `<details class="contact-insights"><summary>Инсайты</summary><p class="hint">${escapeHtml(contact.insights_summary)}</p></details>`
+        : ""
+    }
     <h4>Попытки</h4>
     <table class="data">
       <thead><tr><th>№</th><th></th><th>Исход</th></tr></thead>
@@ -3755,19 +3942,39 @@ function hasAssembledScenario(camp) {
   return hasPreview || hasStages || hasScenario;
 }
 
-async function performPreviewSave(camp, { name, goal, details }) {
+async function performPreviewSave(camp, { name, goal, details, archetype, archetype_locked, knowledge_pack }) {
   camp.name = name;
   camp.goal = goal;
   camp.details = details;
+  if (archetype !== undefined) camp.archetype = archetype;
+  if (archetype_locked !== undefined) camp.archetype_locked = archetype_locked;
+  if (knowledge_pack !== undefined) camp.knowledge_pack = knowledge_pack;
   state.ui.generateError = null;
+  const blockMsg = clientPackGapsBlock(camp.archetype, camp.knowledge_pack);
+  if (blockMsg) {
+    state.ui.generateError = blockMsg;
+    flash(blockMsg, "error");
+    render();
+    return;
+  }
   try {
     if (hasApi()) {
       state.ui.generatePending = true;
       render();
+      const body = { goal, details, knowledge_pack: camp.knowledge_pack || {} };
+      if (camp.archetype_locked && camp.archetype) {
+        body.archetype = camp.archetype;
+        body.archetype_locked = true;
+      } else if (!camp.archetype) {
+        body.archetype_locked = false;
+      } else {
+        body.archetype = camp.archetype;
+        body.archetype_locked = Boolean(camp.archetype_locked);
+      }
       const updated = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}`, {
         method: "PATCH",
         session: state.session,
-        body: { goal, details },
+        body,
       });
       Object.assign(camp, mapCampaignFromApi(updated, camp));
       state.ui.generatePending = false;
@@ -3791,6 +3998,30 @@ async function performPreviewSave(camp, { name, goal, details }) {
 }
 
 function bindCampaignForms() {
+  document.querySelectorAll(".archetype-card").forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.preventDefault();
+      if (btn.disabled || locked()) return;
+      const id = btn.getAttribute("data-archetype") || "";
+      const form = btn.closest("#new-campaign-form");
+      if (form) {
+        const d = state.ui.newCampaignDraft || {};
+        d.archetype = id;
+        d.archetype_locked = Boolean(id);
+        d.knowledge_pack = d.knowledge_pack || {};
+        state.ui.newCampaignDraft = d;
+        render();
+        return;
+      }
+      const camp = workspaceCampaign();
+      if (!camp || isStarted(camp)) return;
+      camp.archetype = id;
+      camp.archetype_locked = Boolean(id);
+      persistCampaigns();
+      render();
+    };
+  });
+
   const previewForm = document.getElementById("preview-form");
   if (previewForm) {
     previewForm.onsubmit = async (e) => {
@@ -3800,6 +4031,10 @@ function bindCampaignForms() {
       const name = document.getElementById("preview-name")?.value.trim() ?? camp.name ?? "";
       const goal = document.getElementById("preview-goal").value.trim();
       const details = document.getElementById("preview-details").value.trim();
+      const activeCard = document.querySelector(".archetype-card.is-active[data-archetype-name=\"archetype-pick\"]");
+      const archetype = activeCard ? activeCard.getAttribute("data-archetype") || "" : camp.archetype || "";
+      const archetype_locked = Boolean(archetype);
+      const knowledge_pack = readKnowledgePackFromDom(archetype);
       if (!goal) {
         flash("Опишите цель звонка", "error");
         return;
@@ -3808,13 +4043,14 @@ function bindCampaignForms() {
         flash("Допишите сведения", "error");
         return;
       }
+      const payload = { name, goal, details, archetype, archetype_locked, knowledge_pack };
       if (hasAssembledScenario(camp)) {
-        state.ui.pendingPreviewSave = { name, goal, details };
+        state.ui.pendingPreviewSave = payload;
         state.ui.saveRebuildOpen = true;
         render();
         return;
       }
-      await performPreviewSave(camp, { name, goal, details });
+      await performPreviewSave(camp, payload);
     };
   }
 
@@ -3863,11 +4099,22 @@ function bindCampaignForms() {
       const goal = document.getElementById("camp-goal").value.trim();
       const details = document.getElementById("camp-details").value;
       const name = document.getElementById("camp-name").value.trim();
-      state.ui.newCampaignDraft = { name, goal, details };
+      const activeCard = document.querySelector("#new-campaign-form .archetype-card.is-active");
+      const archetype = activeCard ? activeCard.getAttribute("data-archetype") || "" : "";
+      const archetype_locked = Boolean(archetype);
+      const knowledge_pack = readKnowledgePackFromDom(archetype);
+      state.ui.newCampaignDraft = { name, goal, details, archetype, archetype_locked, knowledge_pack };
       state.ui.newCampaignError = null;
       if (!goal) {
         state.ui.newCampaignError = "Опишите цель звонка";
         flash("Опишите цель звонка", "error");
+        render();
+        return;
+      }
+      const gapBlock = clientPackGapsBlock(archetype, knowledge_pack);
+      if (gapBlock) {
+        state.ui.newCampaignError = gapBlock;
+        flash(gapBlock, "error");
         render();
         return;
       }
@@ -3878,12 +4125,17 @@ function bindCampaignForms() {
           state.ui.generatePending = true;
           state.ui.generateError = null;
           render();
+          const createBody = { goal, details, knowledge_pack };
+          if (archetype_locked) {
+            createBody.archetype = archetype;
+            createBody.archetype_locked = true;
+          }
           const created = await apiFetch("/api/cabinet/campaigns", {
             method: "POST",
             session: state.session,
-            body: { goal, details },
+            body: createBody,
           });
-          camp = mapCampaignFromApi(created, { name, goal, details });
+          camp = mapCampaignFromApi(created, { name, goal, details, archetype, archetype_locked, knowledge_pack });
           try {
             const generated = await apiFetch(
               `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario/generate`,
@@ -3898,6 +4150,7 @@ function bindCampaignForms() {
             const code = genEx?.code;
             if (isGenerateErrorCode(code)) {
               state.ui.generateError = errorMessage(code);
+              state.ui.newCampaignError = errorMessage(code);
             }
             flash(errorMessage(code), "error");
           }
@@ -3907,9 +4160,12 @@ function bindCampaignForms() {
             name,
             goal,
             details,
+            archetype,
+            archetype_locked,
+            knowledge_pack,
             preview: buildPreview({ goal, details, preview: {} }),
             scenarioText: details,
-            stages: [{ goal, input: "Приветствие", output: "Суть" }],
+            stages: [{ goal, input: "Приветствие", output: "Суть", kind: "open" }],
             verdicts: ensureVerdicts({ goal }),
           });
         }
@@ -3917,7 +4173,7 @@ function bindCampaignForms() {
         persistCampaigns();
         setActiveCampaignId(camp.id);
         state.ui.showNewCampaign = false;
-        state.ui.newCampaignDraft = { name: "", goal: "", details: "" };
+        state.ui.newCampaignDraft = { name: "", goal: "", details: "", archetype: "", archetype_locked: false, knowledge_pack: {} };
         state.ui.newCampaignError = null;
         if (scenarioAssembled) {
           flash(hasApi() ? "Кампания создана, сценарий собран" : "Кампания создана");
