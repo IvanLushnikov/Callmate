@@ -337,6 +337,15 @@ function themeControls() {
   </div>`;
 }
 
+function telephonyBanner() {
+  const t = state.telephony;
+  if (t.checking || t.status === "ok") return "";
+  return `<div class="banner banner-warn desk-banner">
+    <strong>Подключите телефонию, чтобы запускать обзвон</strong>
+    <p class="hint"><a href="#/cabinet/integrations">Перейти в интеграции</a></p>
+  </div>`;
+}
+
 function lockedBanner() {
   if (!state.companyLocked || state.impersonate) return "";
   return `<div class="banner banner-danger">
@@ -849,7 +858,7 @@ function pageCampaignList() {
     return deskPage(
       "Кампании",
       "",
-      `<div class="empty-state empty-state-hero desk-empty-hero">
+      `${telephonyBanner()}<div class="empty-state empty-state-hero desk-empty-hero">
         <div class="empty-state-mark" aria-hidden="true"></div>
         <h3 class="empty-state-title">Пока нет кампаний</h3>
         <p class="empty-state-lead">Создайте первую — от цели до обзвона</p>
@@ -871,6 +880,8 @@ function pageCampaignList() {
     .join("");
 
   return `${deskPageHeadRow("Кампании", "От цели до обзвона в одном месте", createBtn, { id: "sec-campaign" })}
+    <div class="desk-page-body">
+      ${telephonyBanner()}
     ${deskSurface(
       `<table class="data data-camps">
         <thead><tr><th>Название</th><th>Состояние</th><th>Цель</th><th>Номеров</th></tr></thead>
@@ -878,6 +889,7 @@ function pageCampaignList() {
       </table>`,
       { className: "desk-table-surface" }
     )}
+    </div>
   </section>`;
 }
 
@@ -1393,7 +1405,7 @@ function campaignWorkspace(camp) {
       </div>
     </div>
 
-    <section class="flow-section outcomes-section desk-section-compact" id="sec-analytics">
+    <section class="flow-section outcomes-section desk-section-compact outcomes-panel-desk" id="sec-analytics">
       <h2 class="section-title-bar">Итоги кампании</h2>
       <div class="metrics-band">${blockCampaignAnalytics(camp)}</div>
     </section>

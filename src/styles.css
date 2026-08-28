@@ -40,6 +40,7 @@
   --control-h: 2.75rem;
   --font: "Manrope", system-ui, sans-serif;
   --display: "Syne", "Manrope", sans-serif;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 [data-theme="dark"] {
@@ -175,10 +176,16 @@ input:focus, select:focus, textarea:focus {
   font-size: 0.92rem;
   letter-spacing: -0.01em;
   white-space: nowrap;
-  transition: filter 0.12s ease, transform 0.12s ease;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 24%, transparent),
+    0 4px 14px color-mix(in srgb, var(--accent) 18%, transparent);
+  transition: filter 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
 }
 
-.btn:hover { filter: brightness(1.05); }
+.btn:hover {
+  filter: brightness(1.04);
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--accent) 28%, transparent),
+    0 8px 20px color-mix(in srgb, var(--accent) 22%, transparent);
+}
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
@@ -186,6 +193,11 @@ input:focus, select:focus, textarea:focus {
   background: var(--surface);
   color: var(--ink);
   border-color: var(--line);
+  box-shadow: none;
+}
+
+.btn.secondary:hover {
+  box-shadow: var(--shadow-card);
 }
 
 .btn.ghost {
@@ -262,7 +274,7 @@ form.panel > .btn,
   gap: var(--s2);
 }
 
-.stack- Tight { gap: var(--s1); }
+.stack-tight { gap: var(--s1); }
 
 /* —— Login —— */
 .login-wrap {
@@ -384,14 +396,18 @@ form.panel > .btn,
 }
 
 .page-topbar-desk {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
   gap: var(--space-5);
   min-height: 3.25rem;
   padding: 0 clamp(1rem, 3vw, 1.5rem);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line);
-  box-shadow: none;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 .page-topbar-desk .brand {
@@ -477,11 +493,17 @@ form.panel > .btn,
   position: relative;
   width: min(100%, var(--page));
   margin: 0 auto;
-  padding: var(--space-4) clamp(1rem, 3vw, 1.5rem) var(--space-6);
+  padding: var(--space-6) clamp(1rem, 3vw, 1.5rem) var(--space-6);
   flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+.page-shell-desk {
+  background:
+    radial-gradient(ellipse 90% 60% at 50% -30%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%),
+    var(--bg1);
 }
 
 .app-tabs {
@@ -2023,6 +2045,9 @@ button.linkish:hover { text-decoration: underline; }
 
 .workspace-desk {
   gap: var(--s4);
+  width: 100%;
+  max-width: min(100%, var(--page));
+  margin: 0 auto;
 }
 
 .workspace-chrome {
@@ -2136,7 +2161,7 @@ button.linkish:hover { text-decoration: underline; }
 
 .workspace-desk-body {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(28rem, 0.85fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(30rem, 0.8fr);
   gap: var(--space-6);
   align-items: start;
   margin-bottom: var(--space-6);
@@ -2245,10 +2270,26 @@ button.linkish:hover { text-decoration: underline; }
 }
 
 .metrics-band .metrics-grid {
-  max-width: min(100%, 960px);
+  max-width: min(100%, 1040px);
   margin-left: auto;
   margin-right: auto;
   margin-bottom: 0;
+  gap: var(--space-4);
+}
+
+.outcomes-panel-desk {
+  padding: var(--space-6);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-2);
+}
+
+.outcomes-panel-desk > .section-title-bar {
+  max-width: min(100%, 1040px);
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
 }
 
 .workspace-desk .flow-section > h2:not(.section-title-bar),
@@ -2558,7 +2599,7 @@ button.linkish:hover { text-decoration: underline; }
   flex-direction: column;
   gap: var(--space-5);
   width: 100%;
-  max-width: min(100%, 960px);
+  max-width: min(100%, var(--page));
 }
 
 .page-desk > .desk-page {
@@ -2996,29 +3037,31 @@ button.linkish:hover { text-decoration: underline; }
 .metric-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-4);
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  min-height: 5.5rem;
+  min-height: 6rem;
   box-shadow: none;
-  border-top: 3px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--line));
 }
 
 .metric-label {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted);
 }
 
 .metric-value {
-  font-size: 1.35rem;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1.15;
+  font-size: clamp(1.35rem, 2.5vw, 1.65rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+  font-family: var(--display);
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-hint {
@@ -3335,5 +3378,86 @@ button.linkish:hover { text-decoration: underline; }
   .launch-cluster {
     flex-wrap: wrap;
     max-width: none;
+  }
+}
+
+/* —— Cobalt Desk v2: global polish (design skills) —— */
+.page-desk .data th {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.page-desk .data td {
+  vertical-align: middle;
+}
+
+.desk-banner {
+  border-radius: var(--radius-sm);
+}
+
+.desk-banner a {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.desk-banner a:hover {
+  text-decoration: underline;
+}
+
+.empty-state-mark {
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 1rem;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--accent) 85%, #fff),
+    color-mix(in srgb, var(--accent) 55%, #001a66)
+  );
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 28%, transparent);
+  margin-bottom: var(--space-4);
+}
+
+.scenario-flow-panel,
+.contacts-flow-panel,
+.workspace-desk .flow-section.workspace-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.workspace-desk .ready-strip {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.login-wrap-desk {
+  background: var(--bg1);
+}
+
+.login-panel {
+  transition: box-shadow 0.2s var(--ease-out);
+}
+
+.login-panel:focus-within {
+  box-shadow: var(--shadow-card), 0 0 0 3px var(--accent-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-hero::before,
+  .login-hero::after {
+    animation: none;
+  }
+
+  .btn,
+  .camp-row,
+  .desk-link-card,
+  .tel-connect-card {
+    transition: none;
   }
 }
