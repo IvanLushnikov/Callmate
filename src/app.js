@@ -143,6 +143,9 @@ const state = {
     pendingPreviewSave: null,
     contactSelectAll: false,
     contactsBulkConfirm: null,
+    purgeDataOpen: false,
+    purgeDataPending: false,
+    contactsEmptyAfterPurge: false,
     workspaceTab: "overview",
     mobileNavOpen: false,
     consentOpen: false,
@@ -1645,6 +1648,33 @@ function blockCallRules(camp) {
   </section>`;
 }
 
+function blockCampaignPurge(camp) {
+  const running = camp.dial_state === "running";
+  const disabled = running || locked() || state.ui.purgeDataPending;
+  const titleAttr = running ? ` title="Сначала остановите обзвон"` : "";
+  return `<div class="campaign-danger-row" id="sec-campaign-purge">
+    <p class="hint">Номера и записи разговоров можно удалить раньше обычного срока хранения.</p>
+    <button class="btn ghost danger-ghost" type="button" id="purge-data-open" ${disabled ? "disabled" : ""}${titleAttr} ${roAttr()}>Удалить данные кампании</button>
+    ${running ? `<p class="hint">Сначала остановите обзвон</p>` : ""}
+  </div>`;
+}
+
+function purgeDataModalHtml(camp) {
+  if (!state.ui.purgeDataOpen || !camp) return "";
+  const pending = state.ui.purgeDataPending;
+  return `<div class="modal-backdrop" id="purge-data-backdrop" role="presentation">
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="purge-data-title">
+      <h3 id="purge-data-title">Удалить данные кампании?</h3>
+      <p>Удалим все контакты этой кампании, записи разговоров и вердикты. Цель и сценарий останутся. Восстановить данные нельзя.</p>
+      <div class="error" id="purge-data-error" hidden></div>
+      <div class="row-actions">
+        <button class="btn secondary" type="button" id="purge-data-cancel" ${pending ? "disabled" : ""} autofocus>Отмена</button>
+        <button class="btn danger" type="button" id="purge-data-confirm" data-id="${escapeHtml(camp.id)}" ${pending ? "disabled" : ""}>${pending ? "Удаляем…" : "Удалить данные"}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function blockTestingSection(camp) {
   const started = isStarted(camp);
   if (started) {
@@ -1873,6 +1903,7 @@ function campaignWorkspace(camp) {
         <a class="btn secondary" href="#/cabinet/integrations">Телефония</a>
         <a class="btn secondary" href="#/cabinet/tariffs">Биллинг</a>
       </div>
+      ${blockCampaignPurge(camp)}
     </div>`;
 
   const outcomesFold = hasCampaignCalls(camp)
@@ -1942,6 +1973,7 @@ function campaignWorkspace(camp) {
     </div>`
         : ""
     }
+    ${purgeDataModalHtml(camp)}
     ${locked() ? `<p class="hint workspace-locked-note">Аккаунт заблокирован</p>` : ""}
     ${scheduleDrawerHtml(camp)}
     ${launchReasonsDrawerHtml(camp)}
@@ -2399,7 +2431,7 @@ function sectionContacts(camp) {
             ${open ? `<tr class="expand-row"><td colspan="4">${contactDrawerHtml(camp, r)}</td></tr>` : ""}`;
         })
         .join("")
-    : `<tr class="contacts-empty-row"><td colspan="4"><p class="hint contacts-empty">Загрузите контакты из Excel или CSV. Нужен столбец с телефоном</p></td></tr>`;
+    : `<tr class="contacts-empty-row"><td colspan="4"><p class="hint contacts-empty">${state.ui.contactsEmptyAfterPurge ? "Контактов пока нет. Загрузите файл, если нужен новый обзвон." : "Загрузите контакты из Excel или CSV. Нужен столбец с телефоном"}</p></td></tr>`;
 
   const uploadZone = `<div class="upload-zone upload-zone-dnd${contacts.length ? " upload-zone-quiet" : " upload-zone-empty"}${state.ui.contactsUploading ? " is-uploading" : ""}" id="upload-zone">
         <div class="upload-zone-main">
@@ -3037,6 +3069,125 @@ function bindJumpNav() {
   });
 }
 
+
+function bindPurgeData() {
+  const camp = workspaceCampaign();
+  const openBtn = document.getElementById("purge-data-open");
+  if (openBtn) {
+    openBtn.onclick = () => {
+      if (locked()) return;
+      if (camp?.dial_state === "running") {
+        flash("Сейчас идёт обзвон. Остановите его и повторите удаление данных.", "error");
+        return;
+      }
+      state.ui.purgeDataOpen = true;
+      state.ui.purgeDataPending = false;
+      render();
+    };
+  }
+
+  const closePurge = () => {
+    if (state.ui.purgeDataPending) return;
+    state.ui.purgeDataOpen = false;
+    state.ui.purgeDataPending = false;
+    render();
+  };
+
+  const cancel = document.getElementById("purge-data-cancel");
+  if (cancel) cancel.onclick = closePurge;
+
+  const backdrop = document.getElementById("purge-data-backdrop");
+  if (backdrop) {
+    backdrop.onclick = (ev) => {
+      if (ev.target === backdrop) closePurge();
+    };
+  }
+
+  const confirmBtn = document.getElementById("purge-data-confirm");
+  if (confirmBtn) {
+    confirmBtn.onclick = async () => {
+      const id = confirmBtn.getAttribute("data-id");
+      const target = camp || campaignById(id);
+      if (!target || locked()) return;
+      const errEl = document.getElementById("purge-data-error");
+      if (errEl) {
+        errEl.hidden = true;
+        errEl.textContent = "";
+      }
+      if (target.dial_state === "running") {
+        const msg = "Сейчас идёт обзвон. Остановите его и повторите удаление данных.";
+        if (errEl) {
+          errEl.hidden = false;
+          errEl.textContent = msg;
+        } else {
+          flash(msg, "error");
+        }
+        return;
+      }
+      state.ui.purgeDataPending = true;
+      render();
+      try {
+        let res = { purged: true, contacts: (target.contacts || []).length, attempts: 0 };
+        if (hasApi()) {
+          res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(target.id)}/purge-data`, {
+            method: "POST",
+            session: state.session,
+            body: { confirm: true },
+          });
+        }
+        target.contacts = [];
+        // keep goal/scenario; no "deleted" contact status
+        persistCampaigns();
+        state.ui.purgeDataOpen = false;
+        state.ui.purgeDataPending = false;
+        state.ui.contactsEmptyAfterPurge = true;
+        const n = Number(res?.contacts ?? 0);
+        const m = Number(res?.attempts ?? 0);
+        if (n === 0 && m === 0) {
+          flash("Данных для удаления не было. Цель и сценарий на месте.");
+        } else {
+          flash(`Данные удалены: контактов — ${n}, попыток — ${m}`);
+        }
+        render();
+      } catch (ex) {
+        state.ui.purgeDataPending = false;
+        const code = ex?.code;
+        let msg;
+        if (code === "campaign_running") msg = errorMessage("campaign_running");
+        else if (code === "confirm_required") msg = errorMessage("confirm_required");
+        else if (code === "not_found" || code === "campaign_not_found") msg = "Кампания не найдена";
+        else msg = errorMessage("purge_failed");
+        const err2 = document.getElementById("purge-data-error");
+        if (err2) {
+          err2.hidden = false;
+          err2.textContent = msg;
+          // re-render keeps pending false but need to refresh button labels
+          render();
+          const err3 = document.getElementById("purge-data-error");
+          if (err3) {
+            err3.hidden = false;
+            err3.textContent = msg;
+          }
+        } else {
+          flash(msg, "error");
+          render();
+        }
+      }
+    };
+  }
+
+  if (state.ui.purgeDataOpen) {
+    const onKey = (ev) => {
+      if (ev.key !== "Escape") return;
+      if (state.ui.purgeDataPending) return;
+      ev.preventDefault();
+      document.removeEventListener("keydown", onKey);
+      closePurge();
+    };
+    document.addEventListener("keydown", onKey);
+  }
+}
+
 function bindShell() {
   document.querySelectorAll("[data-theme-set]").forEach((btn) => {
     btn.addEventListener("click", () => setTheme(btn.getAttribute("data-theme-set")));
@@ -3076,6 +3227,7 @@ function bindShell() {
   bindCampaignForms();
   bindTelephony();
   bindContacts();
+  bindPurgeData();
   bindLaunch();
   bindStatuses();
   bindAnalytics();
@@ -4521,6 +4673,7 @@ async function uploadContactsFile(file, { skipPreview = false } = {}) {
     const preview = state.ui.contactUploadPreview;
     if (preview?.good?.length) {
       camp.contacts = [...(camp.contacts || []), ...preview.good];
+      state.ui.contactsEmptyAfterPurge = false;
       camp.columns = [...new Set([...(camp.columns || []), ...(preview.columns || []).map((c) => c.file || c)])];
       persistCampaigns();
       state.ui.contactUploadPreview = null;
@@ -4703,7 +4856,8 @@ function showNewColumnAlert(camp, good, brandNew) {
       camp.contacts = [...(camp.contacts || []), ...good];
       persistCampaigns();
       box.hidden = true;
-      flash("Номера добавлены");
+            state.ui.contactsEmptyAfterPurge = false;
+flash("Номера добавлены");
       render();
     };
   }
@@ -4760,6 +4914,7 @@ function showReloadPrecheck(camp, incoming, brandNew) {
     if (brandNew?.length) {
       camp.columns = [...new Set([...(camp.columns || []), ...brandNew])];
     }
+    state.ui.contactsEmptyAfterPurge = false;
     persistCampaigns();
     box.hidden = true;
     flash(`Догрузка принята: +${added} новых, обновлено ${updated}`);
