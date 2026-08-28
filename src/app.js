@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=26";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=27";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -1259,13 +1259,15 @@ function campaignWorkspace(camp) {
     <div class="workspace-chrome">
     <header class="workspace-bar workspace-bar-desk">
       <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
-      <div class="workspace-command-row">
+      <div class="workspace-title-row">
         <div class="workspace-heading">
           <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
           <span class="badge badge-quiet">${escapeHtml(dialLabel(camp.dial_state))}</span>
         </div>
-        <a class="workspace-balance-chip hint" href="#/cabinet/tariffs">Баланс ${escapeHtml(String(state.companyBalance))} ₽ · ${escapeHtml(String(state.companyTariff))} ₽/мин</a>
-        <div class="workspace-actions">${dialActionsHtml(camp)}</div>
+        <div class="workspace-toolbar">
+          <a class="workspace-balance-text hint" href="#/cabinet/tariffs">Баланс ${escapeHtml(String(state.companyBalance))} ₽ · ${escapeHtml(String(state.companyTariff))} ₽/мин</a>
+          <div class="workspace-actions">${dialActionsHtml(camp)}</div>
+        </div>
       </div>
     </header>
     ${readinessStripHtml(camp)}
