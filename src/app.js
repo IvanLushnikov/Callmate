@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=27";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=28";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -1242,14 +1242,17 @@ function dialActionsHtml(camp) {
     </div>`;
 }
 
-function deskAccordion(title, bodyHtml, { open = true, hint = "" } = {}) {
-  return `<details class="desk-accordion"${open ? " open" : ""}>
-    <summary class="desk-accordion-summary">
-      <span class="desk-accordion-title">${escapeHtml(title)}</span>
-      ${hint ? `<span class="hint desk-accordion-hint">${escapeHtml(hint)}</span>` : ""}
-    </summary>
-    <div class="desk-accordion-body">${bodyHtml}</div>
-  </details>`;
+function flowStep(num, title, hint, bodyHtml, { id = "" } = {}) {
+  return `<div class="flow-step"${id ? ` id="${escapeHtml(id)}"` : ""}>
+    <div class="flow-step-head">
+      <span class="flow-step-num" aria-hidden="true">${num}</span>
+      <div class="flow-step-titles">
+        <h3 class="flow-step-title">${escapeHtml(title)}</h3>
+        ${hint ? `<p class="hint flow-step-hint">${escapeHtml(hint)}</p>` : ""}
+      </div>
+    </div>
+    <div class="flow-step-body">${bodyHtml}</div>
+  </div>`;
 }
 
 function campaignWorkspace(camp) {
@@ -1314,8 +1317,7 @@ function campaignWorkspace(camp) {
 
     <div class="workspace-desk-body">
       <div class="workspace-col workspace-col--main">
-        ${blockBotPreview(camp, weak, started)}
-        ${blockScenario(camp)}
+        ${blockScenarioFlow(camp, weak, started)}
       </div>
       <div class="workspace-col workspace-col--side">
         ${blockNumbers(camp)}
@@ -1329,7 +1331,7 @@ function campaignWorkspace(camp) {
   </div>`;
 }
 
-function blockBotPreview(camp, weak, started) {
+function blockScenarioFlow(camp, weak, started) {
   const preview = previewForDisplay(camp);
   const dis = started || locked() || state.ui.generatePending ? "disabled" : "";
   const goalVal = camp.goal || preview.goal || "";
@@ -1338,8 +1340,15 @@ function blockBotPreview(camp, weak, started) {
   const hasServerPreview = Boolean(preview.greeting || preview.says || preview.replies || preview.tone);
   const pending = state.ui.generatePending;
   const genErr = state.ui.generateError;
-  const goalBlock = `<div class="preview-slice preview-slice-context preview-slice-compact">
-          <div class="preview-context-main">
+  const stages =
+    camp.stages && camp.stages.length
+      ? camp.stages
+      : camp.goal
+        ? [{ goal: camp.goal, input: "Приветствие", output: "Переход к сути" }]
+        : [];
+  const attrs = camp.columns || [];
+
+  const contextBlock = `<div class="flow-fields">
             <div class="preview-field preview-field-full">
               <label for="preview-name">Название</label>
               <input id="preview-name" value="${escapeHtml(camp.name || "")}" ${dis} />
@@ -1352,22 +1361,23 @@ function blockBotPreview(camp, weak, started) {
             </div>
             <div class="preview-field preview-field-full">
               <label for="preview-details">Сведения</label>
-              <textarea id="preview-details" rows="4" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
+              <textarea id="preview-details" rows="5" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
               <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
             </div>
-          </div>
-          <aside class="goal-verdicts preview-verdicts">
-            <h3>Возможные итоги разговора</h3>
-            <p class="hint">Система собрала список по цели. Менять его нельзя</p>
-            ${
-              verdicts.length
-                ? `<ul>${verdicts.map((v) => `<li>${escapeHtml(typeof v === "string" ? v : v.label || v.id || JSON.stringify(v))}</li>`).join("")}</ul>`
-                : `<p class="hint">Пока нет итогов — сохраните цель и сведения</p>`
-            }
-          </aside>
-        </div>`;
+          </div>`;
 
-  const voiceBlock = `<div class="preview-edit-grid preview-edit-grid-compact">
+  const verdictsBlock = `${
+    verdicts.length
+      ? `<ul class="verdict-chips">${verdicts
+          .map(
+            (v) =>
+              `<li class="verdict-chip">${escapeHtml(typeof v === "string" ? v : v.label || v.id || JSON.stringify(v))}</li>`
+          )
+          .join("")}</ul>`
+      : `<p class="hint verdicts-empty">Пока нет итогов — сохраните цель и сведения</p>`
+  }`;
+
+  const voiceBlock = `<div class="preview-edit-grid preview-voice-grid">
             <div class="preview-field">
               <label for="preview-greeting">Приветствие</label>
               <textarea id="preview-greeting" rows="3" ${dis} placeholder="Здравствуйте!">${escapeHtml(preview.greeting)}</textarea>
@@ -1387,9 +1397,61 @@ function blockBotPreview(camp, weak, started) {
             </div>
           </div>`;
 
-  return `<section class="flow-section workspace-panel" id="sec-preview">
-    <h2 class="section-title-bar">Робот так понял сценарий</h2>
-    <form class="preview-panel" id="preview-form">
+  const stagesBlock = `${
+    stages.length
+      ? `<div class="stages-compact">${stages
+          .map(
+            (s, i) => `<form class="stage-form-compact" data-idx="${i}">
+            <div class="stage-field">
+              <label>Цель этапа</label>
+              <input name="goal" value="${escapeHtml(s.goal || "")}" ${dis} />
+            </div>
+            <div class="stage-field">
+              <label>Что на входе</label>
+              <input name="input" value="${escapeHtml(s.input || "")}" ${dis} />
+            </div>
+            <div class="stage-field">
+              <label>Что на выходе</label>
+              <input name="output" value="${escapeHtml(s.output || "")}" ${dis} />
+            </div>
+            <div class="stage-field stage-field-action">
+              <button class="btn secondary" type="submit" ${dis}>Сохранить этап</button>
+            </div>
+          </form>`
+          )
+          .join("")}</div>`
+      : `<p class="hint">Этапы появятся после сборки сценария</p>`
+  }
+      <div class="scenario-compose">
+        <label for="scenario-text">Текст сценария</label>
+        <textarea id="scenario-text" rows="6" ${dis}>${escapeHtml(camp.scenarioText || camp.details || "")}</textarea>
+        <div class="scenario-compose-actions">
+          <button class="btn secondary" type="button" id="insert-attr" ${dis}>Вставить поле</button>
+          <button class="btn secondary" type="button" id="save-scenario" ${dis}>Сохранить черновик</button>
+          <p class="hint ok-line" id="scenario-ok" hidden>Черновик сохранён</p>
+        </div>
+      </div>
+      <div id="attr-picker" class="panel nested attr-picker-flow" hidden>
+        <h4>Поля из файла</h4>
+        <p class="hint">Имя поля = название столбца в файле</p>
+        ${
+          attrs.length
+            ? attrs
+                .map(
+                  (a) =>
+                    `<button type="button" class="btn secondary attr-pick" data-attr="${escapeHtml(a)}">{${escapeHtml(a)}}</button>`
+                )
+                .join(" ")
+            : `<p class="hint">Сначала загрузите контакты или добавьте поле</p>`
+        }
+      </div>`;
+
+  return `<section class="flow-section workspace-panel scenario-flow-panel" id="sec-preview">
+    <header class="scenario-flow-head">
+      <h2 class="section-title-bar scenario-flow-title">Робот так понял сценарий</h2>
+      <p class="hint scenario-flow-lead">Можно править текст и этапы — ветки рисовать не нужно</p>
+    </header>
+    <form class="preview-panel scenario-flow" id="preview-form">
       ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
       ${
         weak && !started
@@ -1407,18 +1469,26 @@ function blockBotPreview(camp, weak, started) {
       }
       ${
         !hasServerPreview && !pending && !started
-          ? `<p class="hint" id="preview-empty">Сначала сохраните цель и сведения — тогда появится, как робот понял сценарий.</p>`
+          ? `<p class="hint scenario-empty-note" id="preview-empty">Сначала сохраните цель и сведения — тогда появится, как робот понял сценарий.</p>`
           : ""
       }
 
-      <div class="preview-prompt preview-prompt-compact">
-        ${deskAccordion("Цель и сведения", goalBlock, { open: true, hint: "Название, цель, контекст" })}
-        ${deskAccordion("Как звучит робот", voiceBlock, { open: hasServerPreview, hint: "Приветствие, реплики, тон" })}
+      <div class="flow-steps">
+        ${flowStep(1, "Цель и сведения", "Название, цель, контекст разговора", contextBlock, { id: "sec-context" })}
+        ${flowStep(2, "Возможные итоги разговора", "Система собрала список по цели. Менять его нельзя", verdictsBlock, { id: "sec-verdicts" })}
+        ${hasServerPreview || pending ? flowStep(3, "Как звучит робот", "Приветствие, реплики, тон", voiceBlock, { id: "sec-voice" }) : ""}
+        ${flowStep(hasServerPreview || pending ? 4 : 3, "Сценарий и этапы", "Название столбца в файле должно совпадать с полем в сценарии", stagesBlock, { id: "sec-scenario" })}
       </div>
+
       ${
         started || locked()
-          ? `<p class="hint">${started ? "После старта превью только смотрим" : "Аккаунт заблокирован — правки недоступны"}</p>`
-          : `<div class="row-actions preview-save-row">
+          ? `<p class="hint">${started ? "После старта превью только смотрим" : "Аккаунт заблокирован — правки недоступны"}</p>
+            ${
+              started
+                ? `<a class="btn" href="#/cabinet/campaigns/new" style="display:inline-block;margin-top:var(--space-3)">Создать кампанию</a>`
+                : ""
+            }`
+          : `<div class="flow-save-bar">
               <button class="btn" type="submit" id="preview-save-btn" ${pending ? "disabled" : ""}>Сохранить</button>
               <p class="hint">Сохранение цели и сведений заново соберёт, как звучит робот, и этапы.</p>
               <p class="hint ok-line" id="preview-ok" hidden>Сценарий собран</p>
@@ -1428,8 +1498,8 @@ function blockBotPreview(camp, weak, started) {
   </section>`;
 }
 
-function blockScenario(camp) {
-  return sectionScenario(camp);
+function blockBotPreview(camp, weak, started) {
+  return blockScenarioFlow(camp, weak, started);
 }
 
 function blockNumbers(camp) {
@@ -1547,81 +1617,8 @@ function sectionTelephony() {
   </section>`;
 }
 
-function sectionScenario(camp) {
-  if (!camp) return "";
-  const started = isStarted(camp);
-  const dis = started || locked() ? "disabled" : "";
-  const stages =
-    camp.stages && camp.stages.length
-      ? camp.stages
-      : camp.goal
-        ? [{ goal: camp.goal, input: "Приветствие", output: "Переход к сути" }]
-        : [];
-  const attrs = camp.columns || [];
-  return `<section class="flow-section workspace-panel" id="sec-scenario">
-    <div class="section-head section-head-bar">
-      <h2 class="section-title-bar">Сценарий и этапы</h2>
-      <p class="hint section-head-note">Можно править текст; ветки рисовать не нужно</p>
-    </div>
-    <div class="scenario-panel">
-      ${started ? `<div class="banner banner-warn">После старта сценарий и расписание только смотрим. Чтобы изменить — создайте новую кампанию</div>` : ""}
-      <p class="hint">Название столбца в файле должно совпадать с полем в сценарии</p>
-      ${
-        stages.length
-          ? `<div class="stages-compact">${stages
-              .map(
-                (s, i) => `<form class="stage-form-compact" data-idx="${i}">
-            <div class="stage-field">
-              <label>Цель этапа</label>
-              <input name="goal" value="${escapeHtml(s.goal || "")}" ${dis} />
-            </div>
-            <div class="stage-field">
-              <label>Что на входе</label>
-              <input name="input" value="${escapeHtml(s.input || "")}" ${dis} />
-            </div>
-            <div class="stage-field">
-              <label>Что на выходе</label>
-              <input name="output" value="${escapeHtml(s.output || "")}" ${dis} />
-            </div>
-            <div class="stage-field stage-field-action">
-              <button class="btn secondary" type="submit" ${dis}>Сохранить этап</button>
-            </div>
-          </form>`
-              )
-              .join("")}</div>`
-          : `<p class="hint">Этапы появятся после сборки сценария</p>`
-      }
-      <div class="scenario-compose">
-        <label for="scenario-text">Текст сценария</label>
-        <textarea id="scenario-text" rows="4" ${dis}>${escapeHtml(camp.scenarioText || camp.details || "")}</textarea>
-        <div class="scenario-compose-actions">
-          <button class="btn secondary" type="button" id="insert-attr" ${dis}>Вставить поле</button>
-          <button class="btn" type="button" id="save-scenario" ${dis}>Сохранить черновик</button>
-          <p class="hint ok-line" id="scenario-ok" hidden>Черновик сохранён</p>
-        </div>
-      </div>
-      <div id="attr-picker" class="panel nested" hidden>
-        <h4>Поля из файла</h4>
-        <p class="hint">Имя поля = название столбца в файле</p>
-        ${
-          attrs.length
-            ? attrs
-                .map(
-                  (a) =>
-                    `<button type="button" class="btn secondary attr-pick" data-attr="${escapeHtml(a)}">{${escapeHtml(a)}}</button>`
-                )
-                .join(" ")
-            : `<p class="hint">Сначала загрузите контакты или добавьте поле</p>`
-        }
-      </div>
-      ${
-        started
-          ? `<p class="hint">После старта менять нельзя</p>
-        <a class="btn" href="#/cabinet/campaigns/new" style="display:inline-block">Создать кампанию</a>`
-          : ""
-      }
-    </div>
-  </section>`;
+function blockScenario(camp) {
+  return "";
 }
 
 /** Исходы попытки v1 (DESIGN-138 / FE-155) — не статусы канона. */
@@ -1753,9 +1750,9 @@ function sectionContacts(camp) {
       </div>`
     : "";
 
-  return `<section class="flow-section workspace-panel" id="sec-contacts">
-    <h2 class="section-title-bar">Номера</h2>
-    <div class="contacts-panel">
+  return `<section class="flow-section workspace-panel contacts-flow-panel" id="sec-contacts">
+    <h2 class="section-title-bar contacts-flow-title">Номера</h2>
+    <div class="contacts-panel contacts-flow">
       ${reloadHint}
       ${uploadZone}
       ${listBlock}
