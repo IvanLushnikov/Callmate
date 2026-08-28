@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=28";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js?v=29";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -826,8 +826,13 @@ function cabinetBody(parsed) {
   if (parsed.page === "workspace") {
     const camp = campaignById(parsed.id);
     if (!camp) {
-      return `<div class="panel wide"><p>Кампания не найдена</p>
-        <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a></div>`;
+      return deskPage(
+        "Кампания не найдена",
+        "",
+        `<p class="hint">Возможно, её удалили или ссылка устарела</p>
+        <a class="btn secondary" href="#/cabinet/campaigns">К списку кампаний</a>`,
+        { backHref: "#/cabinet/campaigns", backLabel: "← К кампаниям" }
+      );
     }
     return campaignWorkspace(camp);
   }
@@ -841,14 +846,17 @@ function pageCampaignList() {
     : `<a class="btn" href="#/cabinet/campaigns/new">Создать кампанию</a>`;
 
   if (!state.campaigns.length) {
-    return `<section class="campaigns-empty desk-scene" id="sec-campaign">
-      <div class="empty-state empty-state-hero">
+    return deskPage(
+      "Кампании",
+      "",
+      `<div class="empty-state empty-state-hero desk-empty-hero">
         <div class="empty-state-mark" aria-hidden="true"></div>
-        <h2 class="empty-state-title">Пока нет кампаний</h2>
+        <h3 class="empty-state-title">Пока нет кампаний</h3>
         <p class="empty-state-lead">Создайте первую — от цели до обзвона</p>
         ${createBtn}
-      </div>
-    </section>`;
+      </div>`,
+      { id: "sec-campaign", className: "desk-page-empty" }
+    );
   }
 
   const rows = state.campaigns
@@ -862,58 +870,76 @@ function pageCampaignList() {
     )
     .join("");
 
-  return `<section class="campaigns-list" id="sec-campaign">
-    <div class="campaigns-toolbar">
-      <div class="campaigns-head-copy">
-        <h2>Кампании</h2>
-        <p class="hint campaigns-head-sub">От цели до обзвона в одном месте</p>
-      </div>
-      <div class="campaigns-head-action">${createBtn}</div>
-    </div>
-    <div class="campaigns-table-surface">
-      <table class="data data-camps">
+  return `${deskPageHeadRow("Кампании", "От цели до обзвона в одном месте", createBtn, { id: "sec-campaign" })}
+    ${deskSurface(
+      `<table class="data data-camps">
         <thead><tr><th>Название</th><th>Состояние</th><th>Цель</th><th>Номеров</th></tr></thead>
         <tbody>${rows}</tbody>
-      </table>
-    </div>
+      </table>`,
+      { className: "desk-table-surface" }
+    )}
   </section>`;
 }
 
 function pageCampaignNew() {
   if (locked()) {
-    return `<section class="flow-section">
-      <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
-      <h2>Новая кампания</h2>
-      <div class="panel wide"><p class="hint">Аккаунт заблокирован</p></div>
-    </section>`;
+    return deskPage(
+      "Новая кампания",
+      "",
+      `<p class="hint">Аккаунт заблокирован</p>`,
+      {
+        id: "sec-campaign",
+        backHref: "#/cabinet/campaigns",
+        backLabel: "← К кампаниям",
+        className: "desk-page-form",
+      }
+    );
   }
-  return `<section class="flow-section create-campaign desk-scene desk-scene-form" id="sec-campaign">
-    <div class="desk-form-card">
-      <a class="back-link quiet" href="#/cabinet/campaigns">← К кампаниям</a>
-      <h2>Новая кампания</h2>
-      ${newCampaignFormInline()}
-    </div>
-  </section>`;
+  return deskPage(
+    "Новая кампания",
+    "Задайте цель — система соберёт сценарий и этапы",
+    newCampaignFormInline(),
+    {
+      id: "sec-campaign",
+      backHref: "#/cabinet/campaigns",
+      backLabel: "← К кампаниям",
+      className: "desk-page-form",
+    }
+  );
 }
 
 function pageAccount() {
   const who = state.impersonate
     ? `Кабинет «${escapeHtml(state.impersonate.name || "")}» (суперадмин)`
     : "Кабинет компании";
-  return `<section class="flow-section" id="sec-account">
-    <h2>Аккаунт</h2>
-    <div class="panel wide">
-      <p><strong>${who}</strong></p>
-      ${
-        state.companyLocked && !state.impersonate
-          ? `<div class="banner banner-danger"><strong>Аккаунт заблокирован. Можно смотреть, менять и запускать нельзя</strong>
-             <p class="hint">Чтобы снять блокировку, напишите в поддержку CallMate</p></div>`
-          : `<p class="hint">Доступ активен</p>`
-      }
-      <p><a href="#/cabinet/tariffs">Баланс и тариф — в разделе Тарифы</a></p>
-      <p class="hint">Тема оформления — в шапке страницы</p>
+  const lockedNote =
+    state.companyLocked && !state.impersonate
+      ? `<div class="banner banner-danger desk-banner"><strong>Аккаунт заблокирован. Можно смотреть, менять и запускать нельзя</strong>
+         <p class="hint">Чтобы снять блокировку, напишите в поддержку CallMate</p></div>`
+      : "";
+  const body = `<div class="desk-stat-row">
+      ${deskStatCard("Кто вошёл", who)}
+      ${deskStatCard(
+        "Доступ",
+        state.companyLocked && !state.impersonate ? "Ограничен" : "Активен",
+        state.companyLocked && !state.impersonate ? "Только просмотр" : "",
+        { tone: state.companyLocked && !state.impersonate ? "warn" : "ok" }
+      )}
     </div>
-  </section>`;
+    ${lockedNote}
+    <div class="desk-link-cards">
+      <a class="desk-link-card" href="#/cabinet/tariffs">
+        <span class="desk-link-kicker">Баланс и тариф</span>
+        <strong class="desk-link-title">${escapeHtml(String(state.companyBalance))} ₽ · ${escapeHtml(String(state.companyTariff))} ₽/мин</strong>
+        <span class="hint">Открыть раздел «Тарифы»</span>
+      </a>
+      <div class="desk-link-card desk-link-card-static">
+        <span class="desk-link-kicker">Оформление</span>
+        <strong class="desk-link-title">Светлая и тёмная тема</strong>
+        <span class="hint">Переключатель в шапке страницы</span>
+      </div>
+    </div>`;
+  return deskPage("Аккаунт", "Настройки входа и статус компании", body, { id: "sec-account" });
 }
 
 const TARIFF_PACKAGES = [
@@ -927,12 +953,7 @@ const TARIFF_PACKAGES = [
 function pageTariffs() {
   const bal = Number(state.companyBalance) || 0;
   const tariff = Number(state.companyTariff) || 0;
-  const approx =
-    tariff > 0 ? Math.floor(bal / tariff) : null;
-  const approxHtml =
-    approx == null
-      ? `<p class="hint">Тариф ещё не задан</p>`
-      : `<p>≈ ${escapeHtml(String(approx))} мин по вашему тарифу</p>`;
+  const approx = tariff > 0 ? Math.floor(bal / tariff) : null;
   const rows = TARIFF_PACKAGES.map((p) => {
     const yours = tariff > 0 && Number(tariff) === p.price ? ' <span class="badge badge-quiet">Ваш тариф</span>' : "";
     return `<tr>
@@ -941,26 +962,33 @@ function pageTariffs() {
       <td>${escapeHtml(String(p.amount.toLocaleString("ru-RU")))} ₽</td>
     </tr>`;
   }).join("");
-  return `<section class="flow-section" id="sec-tariffs">
-    <h2>Тарифы</h2>
-    <div class="panel wide">
-      <p><strong>Баланс:</strong> ${escapeHtml(String(bal))} ₽</p>
-      ${approxHtml}
-      <p><strong>Ваш тариф:</strong> ${
-        tariff > 0
-          ? `${escapeHtml(String(tariff))} ₽ за минуту разговора`
-          : "тариф ещё не задан"
-      }</p>
-      <h3>Пакеты минут</h3>
-      <p class="hint">Чем больше пакет, тем ниже цена минуты. Минимальный пакет — 1 000 минут.</p>
-      <table class="data">
-        <thead><tr><th>Пакет</th><th>Цена за минуту</th><th>Сумма</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+  const body = `<div class="desk-stat-row desk-stat-row-3">
+      ${deskStatCard("Баланс", `${escapeHtml(String(bal))} ₽`)}
+      ${deskStatCard(
+        "Тариф",
+        tariff > 0 ? `${escapeHtml(String(tariff))} ₽/мин` : "Не задан",
+        tariff > 0 ? "За минуту разговора" : "Попросите поддержку назначить тариф"
+      )}
+      ${deskStatCard(
+        "Хватит примерно",
+        approx == null ? "—" : `${escapeHtml(String(approx))} мин`,
+        approx == null ? "Тариф ещё не задан" : "По текущему балансу"
+      )}
+    </div>
+    <div class="desk-section-block">
+      <h3 class="desk-block-title">Пакеты минут</h3>
+      <p class="hint desk-block-lead">Чем больше пакет, тем ниже цена минуты. Минимальный пакет — 1 000 минут.</p>
+      ${deskSurface(
+        `<table class="data">
+          <thead><tr><th>Пакет</th><th>Цена за минуту</th><th>Сумма</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`,
+        { className: "desk-table-surface" }
+      )}
       <p class="hint">Считаем минуты состоявшегося разговора. Недозвон не тарифицируем.</p>
       <p class="hint">Пополнить баланс может поддержка CallMate. В кабинете оплаты нет.</p>
-    </div>
-  </section>`;
+    </div>`;
+  return deskPage("Тарифы", "Баланс, тариф и пакеты минут", body, { id: "sec-tariffs" });
 }
 
 async function refreshCabinetMe() {
@@ -980,31 +1008,38 @@ async function refreshCabinetMe() {
 function pageAnalytics() {
   const camp = activeCampaign();
   const listMetrics = state.campaigns.length
-    ? `<table class="data" style="margin-top:1rem">
-        <thead><tr><th>Кампания</th><th>Состояние</th><th>Звонков</th><th>До цели</th></tr></thead>
-        <tbody>${state.campaigns
-          .map((c) => {
-            const a = c.analytics;
-            return `<tr>
+    ? deskSurface(
+        `<table class="data">
+          <thead><tr><th>Кампания</th><th>Состояние</th><th>Звонков</th><th>До цели</th></tr></thead>
+          <tbody>${state.campaigns
+            .map((c) => {
+              const a = c.analytics;
+              return `<tr>
               <td><a href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">${escapeHtml(c.name || "Без названия")}</a></td>
               <td>${escapeHtml(dialLabel(c.dial_state))}</td>
               <td>${escapeHtml(String(a?.calls ?? "—"))}</td>
               <td>${escapeHtml(String(a?.goalReached ?? "—"))}</td>
             </tr>`;
-          })
-          .join("")}</tbody>
-      </table>`
+            })
+            .join("")}</tbody>
+        </table>`,
+        { className: "desk-table-surface" }
+      )
     : `<p class="hint">Пока нет кампаний</p>`;
 
-  return `<section class="flow-section desk-block" id="sec-analytics">
-    <h2 class="section-title-bar">Аналитика</h2>
-    <div class="panel wide desk-panel-inner">
-      <h3 class="desk-subhead">Выбранная кампания</h3>
-      ${camp ? blockCampaignAnalytics(camp) : `<p class="hint">Пока нет данных по кампании</p>`}
-      <h3 class="desk-subhead">Все кампании</h3>
-      ${listMetrics}
+  const body = `<div class="desk-section-block">
+      <h3 class="desk-block-title">${camp ? escapeHtml(camp.name || "Без названия") : "Выбранная кампания"}</h3>
+      <p class="hint desk-block-lead">${camp ? "Метрики активной кампании" : "Откройте кампанию в разделе «Кампании»"}</p>
+      <div class="metrics-band analytics-page-metrics">
+        ${camp ? blockCampaignAnalytics(camp) : `<p class="hint">Пока нет данных по кампании</p>`}
+      </div>
     </div>
-  </section>`;
+    <div class="desk-section-block">
+      <h3 class="desk-block-title">Все кампании</h3>
+      ${listMetrics}
+    </div>`;
+
+  return deskPage("Аналитика", "Звонки, минуты, стоимость и выгрузка Excel", body, { id: "sec-analytics" });
 }
 
 function analyticsMetric(label, value, hint = "") {
@@ -1252,6 +1287,40 @@ function flowStep(num, title, hint, bodyHtml, { id = "" } = {}) {
       </div>
     </div>
     <div class="flow-step-body">${bodyHtml}</div>
+  </div>`;
+}
+
+function deskPage(title, lead, bodyHtml, { id = "", backHref = "", backLabel = "← Назад", className = "" } = {}) {
+  return `<section class="desk-page${className ? ` ${escapeHtml(className)}` : ""}"${id ? ` id="${escapeHtml(id)}"` : ""}>
+    ${backHref ? `<a class="back-link quiet" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a>` : ""}
+    <header class="desk-page-head">
+      <h2 class="desk-page-title">${escapeHtml(title)}</h2>
+      ${lead ? `<p class="hint desk-page-lead">${escapeHtml(lead)}</p>` : ""}
+    </header>
+    <div class="desk-page-body">${bodyHtml}</div>
+  </section>`;
+}
+
+function deskPageHeadRow(title, lead, actionsHtml, { id = "" } = {}) {
+  return `<section class="desk-page campaigns-list-page"${id ? ` id="${escapeHtml(id)}"` : ""}>
+    <header class="desk-page-head desk-page-head-row">
+      <div class="desk-page-head-copy">
+        <h2 class="desk-page-title">${escapeHtml(title)}</h2>
+        ${lead ? `<p class="hint desk-page-lead">${escapeHtml(lead)}</p>` : ""}
+      </div>
+      <div class="desk-page-actions">${actionsHtml}</div>
+    </header>`;
+}
+
+function deskSurface(bodyHtml, { className = "" } = {}) {
+  return `<div class="desk-surface${className ? ` ${escapeHtml(className)}` : ""}">${bodyHtml}</div>`;
+}
+
+function deskStatCard(label, valueHtml, hint = "", { tone = "" } = {}) {
+  return `<div class="desk-stat-card${tone ? ` desk-stat-card--${tone}` : ""}">
+    <span class="desk-stat-label">${escapeHtml(label)}</span>
+    <strong class="desk-stat-value">${valueHtml}</strong>
+    ${hint ? `<span class="hint desk-stat-hint">${escapeHtml(hint)}</span>` : ""}
   </div>`;
 }
 
@@ -1510,18 +1579,25 @@ function newCampaignFormInline() {
   const pending = state.ui.generatePending;
   const draft = state.ui.newCampaignDraft || { name: "", goal: "", details: "" };
   const formErr = state.ui.newCampaignError;
-  return `<form class="panel wide create-campaign-form" id="new-campaign-form">
-    <label>Название</label><input id="camp-name" value="${escapeHtml(draft.name || "")}" ${roAttr()} ${pending ? "disabled" : ""} />
-    <p class="hint">Пустое имя — не мешает запуску</p>
-    <label>Цель звонка</label>
-    <input id="camp-goal" placeholder="Например: напомнить о записи" value="${escapeHtml(draft.goal || "")}" ${roAttr()} ${pending ? "disabled" : ""} />
-    <p class="hint">К чему должен привести разговор</p>
-    <label>Сведения</label>
-    <textarea id="camp-details" rows="5" placeholder="Что важно сказать абоненту" ${roAttr()} ${pending ? "disabled" : ""}>${escapeHtml(draft.details || "")}</textarea>
-    <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
+  return `<form class="desk-form flow-fields create-campaign-form" id="new-campaign-form">
+    <div class="preview-field preview-field-full">
+      <label for="camp-name">Название</label>
+      <input id="camp-name" value="${escapeHtml(draft.name || "")}" ${roAttr()} ${pending ? "disabled" : ""} />
+      <p class="hint">Пустое имя — не мешает запуску</p>
+    </div>
+    <div class="preview-field preview-field-full">
+      <label for="camp-goal">Цель звонка</label>
+      <input id="camp-goal" placeholder="Например: напомнить о записи" value="${escapeHtml(draft.goal || "")}" ${roAttr()} ${pending ? "disabled" : ""} />
+      <p class="hint">К чему должен привести разговор</p>
+    </div>
+    <div class="preview-field preview-field-full">
+      <label for="camp-details">Сведения</label>
+      <textarea id="camp-details" rows="5" placeholder="Что важно сказать абоненту" ${roAttr()} ${pending ? "disabled" : ""}>${escapeHtml(draft.details || "")}</textarea>
+      <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
+    </div>
     <div class="error" id="camp-error" ${formErr ? "" : "hidden"}>${formErr ? escapeHtml(formErr) : ""}</div>
     ${pending ? `<p class="hint" id="camp-generate-pending"><strong>Собираем сценарий…</strong></p>` : ""}
-    <div class="row-actions">
+    <div class="flow-save-bar">
       <button class="btn" type="submit" ${roAttr()} ${pending ? "disabled" : ""}>Сохранить</button>
       <a class="btn secondary" href="#/cabinet/campaigns" id="cancel-new-campaign">Отмена</a>
     </div>
@@ -1581,40 +1657,67 @@ function sectionTelephony() {
   const t = state.telephony;
   const linesVal = t.lines != null ? t.lines : "";
   const panel = state.ui.telephonyPanel;
-  let body = "";
-  if (t.checking) {
-    body = `<p><strong>Проверяем подключение…</strong></p>
-      <p class="hint">Это не обзвон — только проверка связи</p>`;
-  } else if (t.status === "ok") {
-    body = `<p><strong>Телефония подключена</strong></p>
-      <p class="hint">Можно создавать кампанию и запускать обзвон</p>
-      ${linesField(linesVal)}
-      <div class="row-actions">
+  const telOk = t.status === "ok" && !t.checking;
+  const telWarn = t.status === "error";
+  const statusTitle = t.checking
+    ? "Проверяем подключение…"
+    : telOk
+      ? "Телефония подключена"
+      : telWarn
+        ? "Не удалось подключить"
+        : "Телефония не подключена";
+  const statusHint = t.checking
+    ? "Это не обзвон — только проверка связи"
+    : telOk
+      ? t.lines != null
+        ? `Линий для обзвона: ${t.lines}`
+        : "Можно создавать кампанию и запускать обзвон"
+      : telWarn
+        ? errorMessage(t.lastError) || ERROR_BY_CODE.sip_unknown
+        : "Подключите SIP или Манго Телеком";
+
+  let statusActions = "";
+  if (telOk) {
+    statusActions = `<div class="row-actions tel-status-actions">
         <button class="btn secondary" type="button" data-open-tel="sip" ${roAttr()}>Изменить данные</button>
       </div>`;
-  } else if (t.status === "error") {
-    const msg = errorMessage(t.lastError) || ERROR_BY_CODE.sip_unknown;
-    body = `<h3>Не удалось подключить телефонию</h3>
-      <p class="error">${escapeHtml(msg)}</p>
-      <div class="row-actions">
+  } else if (telWarn) {
+    statusActions = `<div class="row-actions tel-status-actions">
         <button class="btn" type="button" id="sip-recheck" ${roAttr()}>Проверить снова</button>
         <button class="btn secondary" type="button" data-open-tel="sip" ${roAttr()}>Изменить данные</button>
-      </div>
-      ${linesField(linesVal)}`;
-  } else {
-    body = `<p>Подключите телефонию, чтобы звонить</p>
-      <div class="row-actions">
-        <button class="btn" type="button" data-open-tel="sip" ${roAttr()}>Подключить SIP</button>
-        <button class="btn secondary" type="button" data-open-tel="mango" ${roAttr()}>Подключить через Манго</button>
-      </div>
-      ${linesField(linesVal)}`;
+      </div>`;
+  } else if (!t.checking) {
+    statusActions = `<div class="tel-connect-grid">
+        <button class="tel-connect-card" type="button" data-open-tel="sip" ${roAttr()}>
+          <span class="tel-connect-kicker">SIP</span>
+          <strong class="tel-connect-title">Подключить SIP</strong>
+          <span class="hint">Хост, логин и пароль вашей АТС</span>
+        </button>
+        <button class="tel-connect-card" type="button" data-open-tel="mango" ${roAttr()}>
+          <span class="tel-connect-kicker">Манго</span>
+          <strong class="tel-connect-title">Подключить через Манго Телеком</strong>
+          <span class="hint">Логин и пароль от личного кабинета</span>
+        </button>
+      </div>`;
   }
+
   const expand =
     panel === "sip" ? sipFormInline() : panel === "mango" ? mangoFormInline() : "";
-  return `<section class="flow-section" id="sec-telephony">
-    <h2>Интеграции</h2>
-    <div class="panel wide">${body}${expand}</div>
-  </section>`;
+
+  const body = `<div class="desk-stat-row desk-stat-row-1">
+      ${deskStatCard(
+        "Статус",
+        escapeHtml(statusTitle),
+        telWarn && !t.checking ? "Проверьте хост, логин и пароль" : escapeHtml(statusHint),
+        { tone: telOk ? "ok" : telWarn ? "warn" : t.checking ? "" : "warn" }
+      )}
+    </div>
+    ${telWarn && !t.checking ? `<div class="banner banner-danger desk-banner"><strong>Не удалось подключить телефонию</strong><p class="hint">${escapeHtml(statusHint)}</p></div>` : ""}
+    ${statusActions}
+    ${t.checking ? "" : linesField(linesVal)}
+    ${expand ? `<div class="tel-form-expand">${expand}</div>` : ""}`;
+
+  return deskPage("Интеграции", "Телефония и число линий для обзвона", body, { id: "sec-telephony" });
 }
 
 function blockScenario(camp) {
@@ -2115,20 +2218,26 @@ function loginView() {
   const apiHint = hasApi()
     ? `<p class="hint">В кабинет компании или в админку</p>`
     : `<p class="hint">Сначала укажите адрес API — сейчас только проверка вёрстки</p>`;
-  return `<div class="login-wrap">
+  return `<div class="login-wrap login-wrap-desk">
     <section class="login-hero" aria-label="CallMate">
-      <p class="login-brand">CallMate</p>
+      <p class="login-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
       <p class="login-lead">Кабинет голосовых кампаний</p>
     </section>
     <aside class="login-aside">
-      <form class="panel" id="login-form">
-        <h1>Вход</h1>
+      <form class="login-panel" id="login-form">
+        <h1 class="login-panel-title">Вход</h1>
         ${apiHint}
-        <label for="login">Логин</label>
-        <input id="login" name="login" autocomplete="username" placeholder="Ваш логин" />
-        <label for="password">Пароль</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Пароль" />
-        <button class="btn" id="submit" type="submit">Войти</button>
+        <div class="flow-fields login-fields">
+          <div class="preview-field preview-field-full">
+            <label for="login">Логин</label>
+            <input id="login" name="login" autocomplete="username" placeholder="Ваш логин" />
+          </div>
+          <div class="preview-field preview-field-full">
+            <label for="password">Пароль</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Пароль" />
+          </div>
+        </div>
+        <button class="btn login-submit" id="submit" type="submit">Войти</button>
         <div class="error" id="form-error" hidden></div>
         <p class="hint desktop-note">Удобнее на компьютере. Телефонную вёрстку сделаем позже</p>
       </form>

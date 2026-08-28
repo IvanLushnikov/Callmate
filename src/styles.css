@@ -2552,6 +2552,367 @@ button.linkish:hover { text-decoration: underline; }
   margin-top: var(--space-2);
 }
 
+/* —— Desk pages (cabinet sections) —— */
+.desk-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: 100%;
+  max-width: min(100%, 960px);
+}
+
+.page-desk > .desk-page {
+  flex: 1;
+}
+
+.desk-page-empty {
+  max-width: none;
+  align-items: center;
+  justify-content: center;
+  min-height: min(68vh, 640px);
+}
+
+.desk-empty-hero {
+  padding: var(--space-6) 0;
+}
+
+.desk-page-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.desk-page-head-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.desk-page-head-copy {
+  min-width: 0;
+}
+
+.desk-page-title {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.desk-page-lead {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  max-width: 42rem;
+}
+
+.desk-page-actions {
+  flex-shrink: 0;
+}
+
+.desk-page-actions .btn {
+  min-width: 10rem;
+}
+
+.desk-page-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.desk-page-form {
+  max-width: min(100%, 40rem);
+}
+
+.desk-page-form .desk-page-body {
+  gap: var(--space-4);
+}
+
+.desk-surface {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.desk-table-surface .data {
+  margin: 0;
+}
+
+.desk-table-surface .data th {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  padding: 0.75rem 1rem;
+}
+
+.desk-table-surface .data td {
+  padding: 0.85rem 1rem;
+  vertical-align: middle;
+}
+
+.desk-table-surface .data tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.desk-table-surface .data tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+}
+
+.desk-stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-3);
+}
+
+.desk-stat-row-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.desk-stat-row-1 {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 28rem;
+}
+
+.desk-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-height: 5.5rem;
+}
+
+.desk-stat-card--ok {
+  border-color: color-mix(in srgb, var(--ok) 25%, var(--line));
+  background: color-mix(in srgb, var(--ok-soft) 55%, var(--surface));
+}
+
+.desk-stat-card--warn {
+  border-color: color-mix(in srgb, var(--warn) 30%, var(--line));
+  background: color-mix(in srgb, var(--warn-soft) 50%, var(--surface));
+}
+
+.desk-stat-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.desk-stat-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+.desk-stat-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.desk-section-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.desk-block-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.desk-block-lead {
+  margin: 0;
+  font-size: 0.86rem;
+}
+
+.desk-banner {
+  margin: 0;
+}
+
+.desk-link-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-3);
+}
+
+.desk-link-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.desk-link-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  box-shadow: var(--shadow-card);
+  text-decoration: none;
+}
+
+.desk-link-card-static {
+  cursor: default;
+}
+
+.desk-link-card-static:hover {
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.desk-link-kicker {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.desk-link-title {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.tel-connect-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-2) 0 var(--space-4);
+}
+
+.tel-connect-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.tel-connect-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  box-shadow: var(--shadow-card);
+}
+
+.tel-connect-kicker {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.tel-connect-title {
+  font-size: 0.98rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.tel-status-actions {
+  margin: 0 0 var(--space-4);
+}
+
+.tel-form-expand {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.tel-form-expand .panel.nested {
+  margin-top: 0;
+  padding: var(--space-5);
+  background: var(--surface);
+}
+
+.analytics-page-metrics .metrics-grid {
+  max-width: none;
+  margin-bottom: var(--space-4);
+}
+
+.analytics-page-metrics .row-actions {
+  margin-top: 0;
+}
+
+.desk-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  background: transparent;
+}
+
+.campaigns-list-page {
+  max-width: none;
+}
+
+/* —— Login refresh —— */
+.login-wrap-desk .login-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: clamp(2.4rem, 6vw, 4.2rem);
+  max-width: none;
+}
+
+.login-panel {
+  width: min(100%, 22rem);
+  padding: var(--space-6);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 2px);
+  box-shadow: var(--shadow-card);
+}
+
+.login-panel-title {
+  margin: 0 0 var(--space-2);
+  font-family: var(--display);
+  font-size: 1.45rem;
+  letter-spacing: -0.03em;
+}
+
+.login-fields {
+  margin: var(--space-4) 0;
+  max-width: none;
+}
+
+.login-submit {
+  width: 100%;
+  margin-top: var(--space-2);
+}
+
 .desk-accordion {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -2872,6 +3233,19 @@ button.linkish:hover { text-decoration: underline; }
   .preview-edit-grid,
   .preview-slice-context,
   .goal-layout { grid-template-columns: 1fr; }
+  .desk-stat-row-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .tel-connect-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .desk-page-head-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .contacts-flow-panel {
     position: static;
     max-height: none;
