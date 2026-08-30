@@ -775,6 +775,59 @@ form.panel > .btn,
 }
 .banner-info { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 
+.speed-promise-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface);
+}
+.speed-promise-copy {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.speed-promise-copy strong {
+  display: block;
+  margin-bottom: var(--space-2);
+}
+.speed-promise-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.upload-progress-wrap {
+  margin-top: var(--space-3);
+}
+.upload-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+  margin: var(--space-2) 0;
+}
+.upload-progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.contact-attrs-form {
+  margin: var(--space-4) 0;
+  display: grid;
+  gap: var(--space-3);
+}
+.contact-attr-field {
+  display: grid;
+  gap: var(--space-1);
+  font-size: 0.9rem;
+}
+
 .back-link {
   display: inline-flex;
   align-items: center;

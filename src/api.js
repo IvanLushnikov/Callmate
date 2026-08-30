@@ -21,6 +21,7 @@ export const ERROR_MESSAGES = {
   unsupported_format: "Такой формат файла не подходит",
   file_too_large: "Файл слишком большой",
   missing_columns: "В файле не хватает нужных колонок",
+  missing_attr_values: "У старых номеров нет значения нового поля",
   login_taken: "Такой логин уже занят",
   company_has_running_campaign: "Сначала остановите обзвон в этой компании",
   balance_not_zero: "Подтвердите списание остатка баланса",
