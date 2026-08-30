@@ -90,6 +90,7 @@ const WORKSPACE_TABS = [
 
 const ADMIN_TABS = [
   { id: "companies", label: "Компании", href: "#/admin" },
+  { id: "integrations", label: "Интеграции", href: "#/admin/integrations" },
   { id: "settings", label: "Настройки", href: "#/admin/settings" },
 ];
 
@@ -179,6 +180,22 @@ const state = {
   adminSettings: {
     batch_interval_sec: Number(localStorage.getItem("cm_interval") || "30"),
     default_price_per_minute: Number(localStorage.getItem("cm_default_tariff") || "0"),
+  },
+  adminIntegrations: {
+    loaded: false,
+    items: [],
+    catalog: { llm: [], asr: [], tts: [] },
+    secret_management: null,
+    form: {
+      provider_kind: "openrouter",
+      model: "google/gemma-4-31b-it:free",
+      enabled: true,
+      runtime_mode: "live",
+      secret: "",
+    },
+    busy: false,
+    error: "",
+    ok: "",
   },
 };
 
@@ -285,7 +302,7 @@ function normalizeRoute(path) {
     navigate("/cabinet/campaigns");
     return true;
   }
-  if (path.startsWith("/admin") && path !== "/admin" && path !== "/admin/settings") {
+  if (path.startsWith("/admin") && path !== "/admin" && path !== "/admin/settings" && path !== "/admin/integrations") {
     if (path !== "/admin/companies/new") {
       const card = matchPath(path, "/admin/companies/:id");
       const topup = matchPath(path, "/admin/companies/:id/topup");
@@ -623,13 +640,21 @@ function cabinetShell(activeTab, bodyHtml) {
 }
 
 function adminShell(activeTab = "companies") {
-  const body =
-    activeTab === "settings"
-      ? `<section class="flow-section" id="sec-admin-settings">
+  let body;
+  if (activeTab === "settings") {
+    body = `<section class="flow-section" id="sec-admin-settings">
         <h2>Настройки продукта</h2>
         ${adminSettings()}
-      </section>`
-      : `${adminNewCompany()}${adminCompanyList()}`;
+      </section>`;
+  } else if (activeTab === "integrations") {
+    body = `<section class="flow-section" id="sec-admin-integrations">
+        <h2>Интеграции</h2>
+        <p class="hint">Платформенные LLM / речь. Не путать с SIP компании.</p>
+        ${adminIntegrationsPanel()}
+      </section>`;
+  } else {
+    body = `${adminNewCompany()}${adminCompanyList()}`;
+  }
   return `<div class="page-shell">
     <header class="page-topbar">
       <p class="brand">CallMate · Админка</p>
@@ -827,6 +852,92 @@ function adminSettings() {
       <button class="btn" type="submit">Сохранить</button>
     </form>
   </div>`;
+}
+
+function _llmSliceHtml(title, slice, { labBadge } = {}) {
+  if (!slice) {
+    return `<div class="panel"><h3>${escapeHtml(title)}</h3><p class="hint">LLM ещё не подключён</p></div>`;
+  }
+  const lab =
+    labBadge || slice.provider_kind === "openrouter"
+      ? `<span class="hint" style="margin-left:0.5rem">Лаборатория</span>`
+      : "";
+  const check = slice.last_check || {};
+  return `<div class="panel">
+    <h3>${escapeHtml(title)}${lab}</h3>
+    <p>Провайдер: <strong>${escapeHtml(slice.provider_kind || "—")}</strong></p>
+    <p>Модель: ${escapeHtml(slice.model || "—")}</p>
+    <p class="hint">Endpoint: ${escapeHtml(slice.endpoint || "—")}</p>
+    <p>Ключ: ${slice.has_secret ? "задан" : "нет"} · ревизия ${escapeHtml(String(slice.revision_no ?? "—"))}</p>
+    <p class="hint">Проверка: ${escapeHtml(check.status || "—")}${check.error_code ? ` (${escapeHtml(check.error_code)})` : ""}</p>
+  </div>`;
+}
+
+function adminIntegrationsPanel() {
+  const ai = state.adminIntegrations;
+  const llmItem = (ai.items || []).find((i) => i.kind === "llm") || { active: null, candidate: null };
+  const providers = (ai.catalog && ai.catalog.llm) || [];
+  const form = ai.form || {};
+  const selected = providers.find((p) => p.provider_kind === form.provider_kind) || providers[0];
+  const models = (selected && selected.models) || [];
+  const providerOpts = providers
+    .map((p) => {
+      const label = p.lab ? `${p.provider_kind} (лаборатория)` : p.provider_kind;
+      const sel = p.provider_kind === form.provider_kind ? " selected" : "";
+      return `<option value="${escapeHtml(p.provider_kind)}"${sel}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+  const modelOpts = models
+    .map((m) => {
+      const sel = m === form.model ? " selected" : "";
+      return `<option value="${escapeHtml(m)}"${sel}>${escapeHtml(m)}</option>`;
+    })
+    .join("");
+  const disabled = ai.busy ? " disabled" : "";
+  return `<div>
+    ${_llmSliceHtml("Активная конфигурация", llmItem.active)}
+    ${llmItem.candidate ? _llmSliceHtml("Черновик", llmItem.candidate, { labBadge: llmItem.candidate.provider_kind === "openrouter" }) : ""}
+    <form class="panel" id="admin-llm-meta-form" style="margin-top:1rem">
+      <h3>Языковая модель</h3>
+      <label>Провайдер</label>
+      <select id="admin-llm-provider"${disabled}>${providerOpts || '<option value="">Нет вариантов</option>'}</select>
+      <label>Модель</label>
+      <select id="admin-llm-model"${disabled}>${modelOpts || '<option value="">—</option>'}</select>
+      <p class="hint">URL задаёт сервер. Свой адрес ввести нельзя.</p>
+      <div class="error" id="admin-llm-error" ${ai.error ? "" : "hidden"}>${escapeHtml(ai.error || "")}</div>
+      <p class="hint ok-line" id="admin-llm-ok" ${ai.ok ? "" : "hidden"}>${escapeHtml(ai.ok || "")}</p>
+      <button class="btn" type="submit"${disabled}>Сохранить настройки</button>
+    </form>
+    <form class="panel" id="admin-llm-secret-form" style="margin-top:1rem">
+      <label>API-ключ</label>
+      <input id="admin-llm-secret" type="password" autocomplete="new-password" value=""${disabled} />
+      <p class="hint">Ключ сохраняется только при записи. Просмотреть нельзя.</p>
+      <button class="btn secondary" type="submit"${disabled}>Записать ключ</button>
+    </form>
+    <div class="row-actions" style="margin-top:1rem">
+      <button class="btn" type="button" id="admin-llm-test"${disabled}>Проверить и включить</button>
+    </div>
+    <p class="hint" style="margin-top:1.5rem">ASR / TTS — скоро</p>
+  </div>`;
+}
+
+async function refreshAdminIntegrations() {
+  if (!hasApi() || state.role !== "superadmin" || state.impersonate) return;
+  const data = await apiFetch("/api/admin/integrations", { session: state.session });
+  state.adminIntegrations.items = data.items || [];
+  state.adminIntegrations.catalog = data.catalog || { llm: [], asr: [], tts: [] };
+  state.adminIntegrations.secret_management = data.secret_management || null;
+  state.adminIntegrations.loaded = true;
+  const llmProviders = state.adminIntegrations.catalog.llm || [];
+  if (llmProviders.length) {
+    const current = state.adminIntegrations.form.provider_kind;
+    const match = llmProviders.find((p) => p.provider_kind === current) || llmProviders.find((p) => p.lab) || llmProviders[0];
+    state.adminIntegrations.form.provider_kind = match.provider_kind;
+    const models = match.models || [];
+    if (!models.includes(state.adminIntegrations.form.model)) {
+      state.adminIntegrations.form.model = models[0] || "";
+    }
+  }
 }
 
 function formatLedgerEntry(e) {
@@ -3296,15 +3407,24 @@ function render() {
     }
     return;
   }
-  if (path === "/admin" || path === "/admin/settings") {
+  if (path === "/admin" || path === "/admin/settings" || path === "/admin/integrations") {
     if (!state.session || state.role !== "superadmin") {
       navigate("/forbidden");
       return;
     }
-    app.innerHTML = adminShell(path === "/admin/settings" ? "settings" : "companies");
+    const tab =
+      path === "/admin/settings" ? "settings" : path === "/admin/integrations" ? "integrations" : "companies";
+    app.innerHTML = adminShell(tab);
     bindShell();
     clearFlashSoon();
-    if (hasApi() && !state.ui.adminLoaded) {
+    if (hasApi() && path === "/admin/integrations") {
+      void refreshAdminIntegrations()
+        .then(() => {
+          app.innerHTML = adminShell("integrations");
+          bindShell();
+        })
+        .catch((e) => flash(errorMessage(e?.code), "error"));
+    } else if (hasApi() && !state.ui.adminLoaded) {
       void ensureAdminData();
     }
     return;
@@ -3571,6 +3691,7 @@ function bindShell() {
   bindWorkspaceTabs();
   bindMobileNav();
   bindAdminForms();
+  bindAdminIntegrations();
   bindCampaignForms();
   bindTelephony();
   bindContacts();
@@ -4083,6 +4204,177 @@ function bindAdminForms() {
         render();
       } catch (ex) {
         flash(errorMessage(ex?.code), "error");
+      }
+    };
+  }
+}
+
+function bindAdminIntegrations() {
+  const providerSel = document.getElementById("admin-llm-provider");
+  const modelSel = document.getElementById("admin-llm-model");
+  if (providerSel) {
+    providerSel.onchange = () => {
+      state.adminIntegrations.form.provider_kind = providerSel.value;
+      const providers = (state.adminIntegrations.catalog && state.adminIntegrations.catalog.llm) || [];
+      const match = providers.find((p) => p.provider_kind === providerSel.value);
+      const models = (match && match.models) || [];
+      state.adminIntegrations.form.model = models[0] || "";
+      render();
+    };
+  }
+  if (modelSel) {
+    modelSel.onchange = () => {
+      state.adminIntegrations.form.model = modelSel.value;
+    };
+  }
+
+  function expectedRevisions() {
+    const llmItem = (state.adminIntegrations.items || []).find((i) => i.kind === "llm") || {};
+    return {
+      expected_active_revision_no: llmItem.active ? llmItem.active.revision_no : null,
+      expected_candidate_revision_no: llmItem.candidate ? llmItem.candidate.revision_no : null,
+    };
+  }
+
+  function setFeedback(errText, okText) {
+    state.adminIntegrations.error = errText || "";
+    state.adminIntegrations.ok = okText || "";
+    const err = document.getElementById("admin-llm-error");
+    const ok = document.getElementById("admin-llm-ok");
+    if (err) {
+      err.hidden = !errText;
+      err.textContent = errText || "";
+    }
+    if (ok) {
+      ok.hidden = !okText;
+      ok.textContent = okText || "";
+    }
+  }
+
+  const metaForm = document.getElementById("admin-llm-meta-form");
+  if (metaForm) {
+    metaForm.onsubmit = async (e) => {
+      e.preventDefault();
+      if (!hasApi()) {
+        setFeedback("Сначала укажите адрес API", "");
+        return;
+      }
+      state.adminIntegrations.busy = true;
+      setFeedback("", "");
+      try {
+        const body = {
+          provider_kind: document.getElementById("admin-llm-provider").value,
+          model: document.getElementById("admin-llm-model").value,
+          enabled: true,
+          runtime_mode: "live",
+          ...expectedRevisions(),
+        };
+        await apiFetch("/api/admin/integrations/llm", {
+          method: "PUT",
+          session: state.session,
+          body,
+        });
+        await refreshAdminIntegrations();
+        setFeedback("", "Настройки сохранены");
+        render();
+      } catch (ex) {
+        const code = ex?.code;
+        setFeedback(
+          code === "revision_conflict"
+            ? "Данные устарели — обновите страницу и повторите"
+            : errorMessage(code),
+          ""
+        );
+      } finally {
+        state.adminIntegrations.busy = false;
+      }
+    };
+  }
+
+  const secretForm = document.getElementById("admin-llm-secret-form");
+  if (secretForm) {
+    secretForm.onsubmit = async (e) => {
+      e.preventDefault();
+      if (!hasApi()) {
+        setFeedback("Сначала укажите адрес API", "");
+        return;
+      }
+      const input = document.getElementById("admin-llm-secret");
+      const secret = (input && input.value) || "";
+      if (!secret.trim()) {
+        setFeedback("Введите API-ключ", "");
+        return;
+      }
+      state.adminIntegrations.busy = true;
+      setFeedback("", "");
+      try {
+        await apiFetch("/api/admin/integrations/llm/secret", {
+          method: "POST",
+          session: state.session,
+          body: { secret, ...expectedRevisions() },
+        });
+        if (input) input.value = "";
+        state.adminIntegrations.form.secret = "";
+        await refreshAdminIntegrations();
+        setFeedback("", "Ключ записан");
+        render();
+        const ok = document.getElementById("admin-llm-ok");
+        if (ok) {
+          ok.hidden = false;
+          ok.textContent = "Ключ записан";
+        }
+      } catch (ex) {
+        const code = ex?.code;
+        setFeedback(
+          code === "revision_conflict"
+            ? "Данные устарели — обновите страницу и повторите"
+            : errorMessage(code),
+          ""
+        );
+      } finally {
+        state.adminIntegrations.busy = false;
+      }
+    };
+  }
+
+  const testBtn = document.getElementById("admin-llm-test");
+  if (testBtn) {
+    testBtn.onclick = async () => {
+      if (!hasApi()) {
+        setFeedback("Сначала укажите адрес API", "");
+        return;
+      }
+      const llmItem = (state.adminIntegrations.items || []).find((i) => i.kind === "llm") || {};
+      const rev = llmItem.candidate || llmItem.active;
+      if (!rev) {
+        setFeedback("Сначала сохраните настройки и ключ", "");
+        return;
+      }
+      state.adminIntegrations.busy = true;
+      setFeedback("", "Проверяем…");
+      try {
+        const result = await apiFetch("/api/admin/integrations/llm/test", {
+          method: "POST",
+          session: state.session,
+          body: { revision_no: rev.revision_no, activate_on_success: true },
+        });
+        await refreshAdminIntegrations();
+        if (result.status === "passed") {
+          setFeedback("", "Подключение проверено, конфигурация активна");
+        } else {
+          setFeedback(errorMessage(result.error_code) || "Проверка не прошла", "");
+        }
+        render();
+      } catch (ex) {
+        const code = ex?.code;
+        setFeedback(
+          code === "revision_conflict"
+            ? "Данные устарели — обновите страницу и повторите"
+            : errorMessage(code),
+          ""
+        );
+      } finally {
+        state.adminIntegrations.busy = false;
       }
     };
   }
