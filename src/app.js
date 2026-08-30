@@ -29,6 +29,11 @@ const ERROR_BY_CODE = {
   sip_unknown: "Не удалось подключить телефонию. Попробуйте ещё раз",
 };
 
+/** FE-238 — пачки первой загрузки в пустую кампанию */
+const CONTACT_UPLOAD_CHUNK_SIZE = 2000;
+const CONTACT_UPLOAD_MAX_ROWS = 2_000_000;
+const SPEED_PROMISE_DISMISS_KEY = "cm_speed_promise_dismissed";
+
 const ARCHETYPE_CARDS = [
   { id: "", title: "Подберём сами", hint: "По цели и сведениям", auto: true },
   { id: "guide_task", title: "Помощь в приложении", hint: "Проведём по шагам интеграции или настройки" },
@@ -146,6 +151,7 @@ const state = {
     adminDeleteId: null,
     adminLoaded: false,
     contactsUploading: false,
+    uploadCancelRequested: false,
     telephonyLoaded: false,
     campaignsLoaded: false,
     gateErrors: [],
@@ -1095,11 +1101,14 @@ function pageCampaignList() {
     return deskPage(
       "Кампании",
       "От цели до обзвона — в одном месте",
-      `${telephonyOnboardingBlock()}<div class="empty-state empty-state-hero desk-empty-hero">
-        <div class="empty-state-mark" aria-hidden="true"></div>
-        <h3 class="empty-state-title">Пока нет кампаний</h3>
-        <p class="empty-state-lead">Создайте первую кампанию: задайте цель, загрузите контакты и запустите обзвон. Всё займёт меньше часа.</p>
-        ${createBtn}
+      `<div class="desk-empty-stack">
+        ${telephonyOnboardingBlock()}
+        <div class="empty-state empty-state-hero desk-empty-hero">
+          <div class="empty-state-mark" aria-hidden="true"></div>
+          <h3 class="empty-state-title">Пока нет кампаний</h3>
+          <p class="empty-state-lead">Создайте первую кампанию: задайте цель, загрузите контакты и запустите обзвон. Всё займёт меньше часа.</p>
+          ${createBtn}
+        </div>
       </div>`,
       { id: "sec-campaign", className: "desk-page-empty campaigns-list-page" }
     );
@@ -1422,18 +1431,20 @@ function reasonJumpTarget(reason) {
 function reasonLinkHtml(reason, { asButton = true } = {}) {
   const jump = reasonJumpTarget(reason);
   const text = escapeHtml(reason.text);
+  const hint = reason.hint ? `<span class="hint ready-reason-hint">${escapeHtml(reason.hint)}</span>` : "";
+  let core;
   if (jump === "integrations") {
-    return `<a class="ready-reason" href="#/cabinet/integrations">${text}</a>`;
-  }
-  if (jump === "account") {
-    return `<a class="ready-reason" href="#/cabinet/tariffs">${text}</a>`;
-  }
-  if (jump) {
-    return asButton
+    core = `<a class="ready-reason" href="#/cabinet/integrations">${text}</a>`;
+  } else if (jump === "account") {
+    core = `<a class="ready-reason" href="#/cabinet/tariffs">${text}</a>`;
+  } else if (jump) {
+    core = asButton
       ? `<button type="button" class="ready-reason" data-jump="${escapeHtml(jump)}">${text}</button>`
       : `<a class="ready-reason" href="#${escapeHtml(jump)}" data-jump="${escapeHtml(jump)}">${text}</a>`;
+  } else {
+    core = `<span class="ready-reason ready-reason-static">${text}</span>`;
   }
-  return `<span class="ready-reason ready-reason-static">${text}</span>`;
+  return hint ? `<span class="ready-reason-wrap">${core}${hint}</span>` : core;
 }
 
 function reasonCtaHtml(reason) {
@@ -1908,10 +1919,30 @@ function workspaceOverviewTab(camp, weak, started) {
   );
 
   return `<div class="workspace-tab-panel" data-tab="overview">
+    ${speedPromiseBannerHtml()}
     ${launchChecklistHtml(camp)}
     <div class="onboard-steps">${step1Simple}${step2}${step3}${step4}</div>
     ${blockCallProgress(camp)}
   </div>`;
+}
+
+/** FE-243 — онбординг «запуск за день», без обещания SLA линии */
+function speedPromiseBannerHtml() {
+  try {
+    if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(SPEED_PROMISE_DISMISS_KEY) === "1") {
+      return "";
+    }
+  } catch {
+    /* sessionStorage может быть недоступен */
+  }
+  return `<aside class="speed-promise-banner" id="speed-promise-banner" data-us243-proxy>
+    <div class="speed-promise-banner-body">
+      <h3 class="speed-promise-banner-title">Запуск за день</h3>
+      <p class="speed-promise-banner-text">Цель, контакты, телефония и расписание — обычно укладываются в один рабочий день. Это про настройку кабинета, не про гарантию линии связи.</p>
+      <button type="button" class="btn secondary" data-speed-banner-cta>К шагам настройки</button>
+    </div>
+    <button type="button" class="btn ghost speed-promise-dismiss" data-speed-banner-dismiss>Скрыть</button>
+  </aside>`;
 }
 
 function campaignWorkspace(camp) {
@@ -1959,15 +1990,14 @@ function campaignWorkspace(camp) {
             <h1 class="workspace-title">${escapeHtml(camp.name || "Без названия")}</h1>
             ${statusBadgeHtml(camp)}
           </div>
+          <div class="workspace-toolbar">
+            <span class="workspace-readiness" title="Готовность к запуску">${completed} из ${total}</span>
+            ${balanceChipHtml({ className: "balance-chip--workspace" })}
+            <div class="workspace-summary-actions">${dialActionsHtml(camp)}</div>
+          </div>
         </div>
       </header>
-      <div class="workspace-summary-bar">
-        <div class="workspace-summary-meta">
-          <span class="workspace-readiness">${completed} из ${total} шагов</span>
-          ${balanceChipHtml({ className: "balance-chip--workspace" })}
-        </div>
-        <div class="workspace-summary-actions">${dialActionsHtml(camp)}</div>
-      </div>
+      ${readinessStripHtml(camp)}
       ${workspaceTabsHtml(tab)}
     </div>
     <div id="stop-confirm" class="panel nested" hidden>
@@ -2042,27 +2072,29 @@ function blockScenarioFlow(camp, weak, started) {
       : `<p class="hint verdicts-empty">Пока нет итогов — сохраните цель и сведения</p>`
   }`;
 
-  const contextBlock = `<div class="flow-fields">
-            <div class="preview-field preview-field-full">
-              <label for="preview-name">Название</label>
-              <input id="preview-name" value="${escapeHtml(camp.name || "")}" ${dis} />
-              <p class="hint">Пустое имя — не мешает запуску</p>
+  const contextBlock = `<div class="context-split">
+            <div class="flow-fields">
+              <div class="preview-field preview-field-full">
+                <label for="preview-name">Название</label>
+                <input id="preview-name" value="${escapeHtml(camp.name || "")}" ${dis} />
+                <p class="hint">Пустое имя — не мешает запуску</p>
+              </div>
+              <div class="preview-field preview-field-full">
+                <label for="preview-goal">Цель звонка</label>
+                <textarea id="preview-goal" rows="2" ${dis} placeholder="Например: напомнить о записи">${escapeHtml(goalVal)}</textarea>
+                <p class="hint">К чему должен привести разговор</p>
+              </div>
+              <div class="preview-field preview-field-full">
+                <label for="preview-details">Сведения</label>
+                <textarea id="preview-details" rows="4" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
+                <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
+              </div>
             </div>
-            <div class="preview-field preview-field-full">
-              <label for="preview-goal">Цель звонка</label>
-              <textarea id="preview-goal" rows="2" ${dis} placeholder="Например: напомнить о записи">${escapeHtml(goalVal)}</textarea>
-              <p class="hint">К чему должен привести разговор</p>
+            <div class="verdicts-zone" id="sec-verdicts">
+              <p class="form-zone-sub">Возможные итоги разговора</p>
+              <p class="hint">Система собрала список по цели. Менять его нельзя</p>
+              ${verdictsBlock}
             </div>
-            <div class="preview-field preview-field-full">
-              <label for="preview-details">Сведения</label>
-              <textarea id="preview-details" rows="4" ${dis} placeholder="Что важно сказать абоненту">${escapeHtml(detailsVal)}</textarea>
-              <p class="hint">Чем подробнее опишете продукт, условия и частые вопросы — тем точнее будет разговор. Можно своими словами.</p>
-            </div>
-          </div>
-          <div class="verdicts-zone" id="sec-verdicts">
-            <p class="form-zone-sub">Возможные итоги разговора</p>
-            <p class="hint">Система собрала список по цели. Менять его нельзя</p>
-            ${verdictsBlock}
           </div>`;
 
   const voiceBlock = `<div class="preview-edit-grid preview-voice-grid">
@@ -2473,16 +2505,17 @@ function blockScenario(camp) {
   return "";
 }
 
-/** Исходы попытки v1 (DESIGN-138 / FE-155) — не статусы канона. */
+/** Исходы попытки v1 (DESIGN-138 / FE-148) — канон API: busy|no_answer|voicemail|early_hangup */
 const OUTCOME_FILTERS = [
-  { id: "all", label: "Все", codes: null },
-  { id: "busy", label: "Занято", codes: ["busy"] },
-  { id: "no_pickup", label: "Не берёт", codes: ["no_pickup", "no_answer"] },
-  { id: "voicemail", label: "Автоответчик", codes: ["voicemail"] },
-  { id: "early", label: "Ранний сброс", codes: ["early", "early_hangup"] },
+  { id: "all", label: "Все исходы", api: null, codes: null },
+  { id: "busy", label: "Занято", api: "busy", codes: ["busy"] },
+  { id: "no_answer", label: "Не берёт", api: "no_answer", codes: ["no_answer", "no_pickup"] },
+  { id: "voicemail", label: "Автоответчик", api: "voicemail", codes: ["voicemail"] },
+  { id: "early_hangup", label: "Ранний сброс", api: "early_hangup", codes: ["early_hangup", "early"] },
 ];
 
 function contactCauseCode(contact) {
+  if (contact.last_attempt_outcome) return contact.last_attempt_outcome;
   const attempts = contact.attempts || [];
   if (attempts.length) {
     const last = attempts[attempts.length - 1];
@@ -2497,8 +2530,51 @@ function matchesOutcomeFilter(contact, outcomeFilterId) {
   if (!outcomeFilterId || outcomeFilterId === "all") return true;
   const spec = OUTCOME_FILTERS.find((f) => f.id === outcomeFilterId);
   if (!spec?.codes) return true;
+  if (contact.last_attempt_outcome && spec.api && contact.last_attempt_outcome === spec.api) {
+    return true;
+  }
   const code = contactCauseCode(contact);
   return spec.codes.includes(code);
+}
+
+function contactsListQuery() {
+  const params = new URLSearchParams();
+  const st = state.ui.contactStatusFilter;
+  if (st && st !== "all") params.set("status", STATUS[st] || st);
+  const oc = state.ui.contactOutcomeFilter;
+  if (oc && oc !== "all") {
+    const spec = OUTCOME_FILTERS.find((f) => f.id === oc);
+    params.set("outcome", spec?.api || oc);
+  }
+  const q = params.toString();
+  return q ? `?${q}` : "";
+}
+
+function mapContactListItem(item) {
+  return {
+    id: item.id,
+    phone: item.phone,
+    status: item.status || STATUS.in_progress,
+    attrs: item.attrs || {},
+    verdict: item.verdict ?? null,
+    attempt_count: item.attempt_count ?? 0,
+    last_transcript: item.last_transcript ?? null,
+    attempts: item.attempts || (item.last_attempt ? [item.last_attempt] : []),
+    last_attempt: item.last_attempt || null,
+    last_attempt_outcome: item.last_attempt_outcome || null,
+    cause_code: item.cause_code || null,
+    name: item.name || (item.attrs && item.attrs.name) || "",
+  };
+}
+
+async function reloadCampaignContactsList(camp) {
+  if (!hasApi() || !camp?.id) return;
+  const data = await apiFetch(
+    `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts${contactsListQuery()}`,
+    { session: state.session }
+  );
+  camp.contacts = (data?.items || []).map(mapContactListItem);
+  persistCampaigns();
 }
 
 function renderUploadPreview(preview) {
@@ -2631,8 +2707,15 @@ function sectionContacts(camp) {
         </details>
       </div>
       ${state.ui.contactUploadPreview ? renderUploadPreview(state.ui.contactUploadPreview) : ""}
-      <p id="upload-progress" class="hint upload-state" ${state.ui.contactsUploading ? "" : "hidden"}>Загружаем контакты…</p>
-      <p class="hint upload-state" id="upload-progress-hint" ${state.ui.contactsUploading ? "" : "hidden"}>Большой файл может занять несколько минут</p>
+      <div class="upload-progress-block upload-state" id="upload-progress-block" ${state.ui.contactsUploading ? "" : "hidden"}>
+        <p id="upload-progress" class="hint">Загружаем контакты…</p>
+        <div class="upload-progress-track" aria-hidden="true">
+          <div id="upload-progress-bar" class="upload-progress-bar" style="width:0%"></div>
+        </div>
+        <p class="hint" id="upload-batch-hint">Файл обрабатывается пачками</p>
+        <p class="hint" id="upload-progress-hint">Большой файл может занять несколько минут</p>
+        <button class="btn secondary" type="button" id="upload-cancel">Отменить загрузку</button>
+      </div>
       <p class="hint ok-line upload-state" id="upload-ok" hidden>Контакты загружены</p>
       <div class="error upload-state" id="upload-errors"></div>
       ${warnings.map((w) => `<p class="error">${escapeHtml(w)}</p>`).join("")}
@@ -2769,14 +2852,37 @@ function scheduleDrawerHtml(camp) {
     </aside>`;
 }
 
+function gateReasonText(err) {
+  const code = typeof err === "string" ? err : err?.code;
+  const details = typeof err === "object" && err ? err.details : null;
+  if (code === "missing_attr_values") {
+    const problems = Array.isArray(details?.problems) ? details.problems : [];
+    const fields = [...new Set(problems.map((p) => p?.attr).filter(Boolean))];
+    if (fields.length === 1) return `У части номеров пустое поле «${fields[0]}»`;
+    if (fields.length > 1) return `У части номеров пустое поле «${fields.join("», «")}»`;
+    return "У старых номеров нет значения нового поля";
+  }
+  if (code === "missing_columns") {
+    const cols = details?.columns || details?.fields || [];
+    if (Array.isArray(cols) && cols.length) return `Нет столбца «${cols[0]}» в файле`;
+    return "Нет столбца в файле";
+  }
+  return errorMessage(code) || String(code || "Пока нельзя начать");
+}
+
 function launchBlockReasons(camp) {
   const reasons = [];
   if (hasApi() && Array.isArray(state.ui.gateErrors) && state.ui.gateErrors.length) {
     for (const err of state.ui.gateErrors) {
       const code = typeof err === "string" ? err : err?.code;
       reasons.push({
-        text: errorMessage(code) || String(code || "Пока нельзя начать"),
+        text: gateReasonText(err),
         code,
+        action: code === "missing_attr_values" || code === "missing_columns" ? "contacts" : undefined,
+        hint:
+          code === "missing_attr_values"
+            ? "Откройте номер и заполните поле — или догрузите файл"
+            : null,
       });
     }
     return reasons;
@@ -2806,6 +2912,36 @@ async function refreshGates(camp) {
   state.ui.gateErrors = data?.ok ? [] : data?.errors || [{ code: "gate_failed" }];
 }
 
+function contactAttrsFormHtml(camp, contact) {
+  const fromCamp = Array.isArray(camp.columns) ? camp.columns : [];
+  const fromAttrs = Object.keys(contact.attrs || {});
+  const fromStages = [];
+  for (const stage of camp.stages || []) {
+    for (const key of stage.attrs || stage.attributes || []) {
+      if (key) fromStages.push(String(key));
+    }
+  }
+  const fields = [...new Set([...fromCamp, ...fromAttrs, ...fromStages])].filter(
+    (f) => f && !isPhoneHeader(f) && !/^id$/i.test(f)
+  );
+  if (!fields.length) return "";
+  const inputs = fields
+    .map((f) => {
+      const val = (contact.attrs && contact.attrs[f]) || (f === "name" ? contact.name : "") || "";
+      return `<div class="preview-field">
+        <label for="attr-${escapeHtml(contact.id || contact.phone)}-${escapeHtml(f)}">${escapeHtml(f)}</label>
+        <input id="attr-${escapeHtml(contact.id || contact.phone)}-${escapeHtml(f)}" name="${escapeHtml(f)}" value="${escapeHtml(String(val))}" ${roAttr()} />
+      </div>`;
+    })
+    .join("");
+  return `<form class="contact-attrs-form" data-contact-attrs-id="${escapeHtml(contact.id || "")}">
+    <h4>Поля номера</h4>
+    <div class="flow-fields">${inputs}</div>
+    <button class="btn" type="submit" ${roAttr()}>Сохранить</button>
+    <p class="hint contact-attrs-msg" hidden></p>
+  </form>`;
+}
+
 function contactDrawerHtml(camp, contact) {
   const attempts = contact.attempts || [];
   const attemptRows = attempts.length
@@ -2823,11 +2959,15 @@ function contactDrawerHtml(camp, contact) {
         .join("")
     : `<tr><td colspan="3">Попыток ещё не было</td></tr>`;
   const transcript = contact.last_transcript || contact.transcript || "";
+  const lastOutcome = contact.last_attempt_outcome
+    ? `<p><strong>Исход</strong>: ${escapeHtml(outcomeLabel(contact.last_attempt_outcome))}</p>`
+    : "";
   return `<div class="panel nested contact-drawer">
     <h3>Номер</h3>
     <p>${escapeHtml(maskPhone(contact.phone))}</p>
     <p><strong>Статус</strong>: ${escapeHtml(statusLabel(contact.status))}
       ${contact.status === STATUS.done ? `<span class="hint">Поговорили с человеком</span>` : ""}</p>
+    ${lastOutcome}
     <p><strong>Вердикт</strong>: ${
       contact.verdict ? escapeHtml(contact.verdict) : "Вердикта нет — разговора не было"
     }</p>
@@ -2837,6 +2977,7 @@ function contactDrawerHtml(camp, contact) {
         ? `<details class="contact-insights"><summary>Инсайты</summary><p class="hint">${escapeHtml(contact.insights_summary)}</p></details>`
         : ""
     }
+    ${contactAttrsFormHtml(camp, contact)}
     <h4>Попытки</h4>
     <table class="data">
       <thead><tr><th>№</th><th></th><th>Исход</th></tr></thead>
@@ -3057,19 +3198,21 @@ function loginView() {
 }
 
 function forbiddenView() {
-  let action = `<button class="btn" id="forbidden-action" type="button">Войти</button>`;
+  let action = `<button class="btn login-submit" id="forbidden-action" type="button">Войти</button>`;
   if (state.session && state.role === "company") {
-    action = `<button class="btn" id="forbidden-action" type="button">В кабинет</button>`;
+    action = `<button class="btn login-submit" id="forbidden-action" type="button">В кабинет</button>`;
   } else if (state.session && state.role === "superadmin") {
-    action = `<button class="btn" id="forbidden-action" type="button">В админку</button>`;
+    action = `<button class="btn login-submit" id="forbidden-action" type="button">В админку</button>`;
   }
   return `<div class="login-wrap login-wrap-center">
     <div class="login-panel">
       <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
       <h1 class="login-panel-title">Нет доступа</h1>
-      <p class="hint">У вас нет доступа к этой странице</p>
-      ${action}
-      <button class="btn secondary login-panel-secondary" id="forbidden-logout" type="button">Выйти</button>
+      <p class="hint login-panel-hint">У вас нет доступа к этой странице</p>
+      <div class="login-panel-actions">
+        ${action}
+        <button class="btn secondary login-panel-secondary" id="forbidden-logout" type="button">Выйти</button>
+      </div>
     </div>
   </div>`;
 }
@@ -3217,6 +3360,23 @@ function bindWorkspaceTabs() {
     scheduleInline.onclick = () => {
       state.ui.scheduleDrawerOpen = true;
       render();
+    };
+  }
+  const speedDismiss = document.querySelector("[data-speed-banner-dismiss]");
+  if (speedDismiss) {
+    speedDismiss.onclick = () => {
+      try {
+        sessionStorage.setItem(SPEED_PROMISE_DISMISS_KEY, "1");
+      } catch {
+        /* ignore */
+      }
+      render();
+    };
+  }
+  const speedCta = document.querySelector("[data-speed-banner-cta]");
+  if (speedCta) {
+    speedCta.onclick = () => {
+      document.getElementById("sec-launch-checklist")?.scrollIntoView({ behavior: "smooth", block: "start" });
     };
   }
 }
@@ -4640,6 +4800,12 @@ function bindContacts() {
       void uploadContactsFile(f, { skipPreview: true });
     };
   }
+  const uploadCancel = document.getElementById("upload-cancel");
+  if (uploadCancel) {
+    uploadCancel.onclick = () => {
+      state.ui.uploadCancelRequested = true;
+    };
+  }
 
   const camp = workspaceCampaign() || activeCampaign();
 
@@ -4853,22 +5019,41 @@ function bindContacts() {
 
 async function refreshCampaignContacts(camp) {
   if (!hasApi() || !camp?.id) return;
-  const data = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts`, {
-    session: state.session,
-  });
-  camp.contacts = (data?.items || []).map((item) => ({
-    id: item.id,
-    phone: item.phone,
-    status: item.status || STATUS.in_progress,
-    attrs: item.attrs || {},
-    verdict: item.verdict ?? null,
-    attempt_count: item.attempt_count ?? 0,
-    last_transcript: item.last_transcript ?? null,
-    attempts: item.attempts || (item.last_attempt ? [item.last_attempt] : []),
-    last_attempt: item.last_attempt || null,
-    cause_code: item.cause_code || null,
-  }));
-  persistCampaigns();
+  await reloadCampaignContactsList(camp);
+}
+
+function contactRowForUpload(contact) {
+  const row = { phone: contact.phone };
+  if (contact.name) row.name = contact.name;
+  for (const [k, v] of Object.entries(contact.attrs || {})) {
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (s) row[k] = s;
+  }
+  return row;
+}
+
+function setUploadProgressUi({ ratio = 0, label = "Загружаем контакты…" } = {}) {
+  const block = document.getElementById("upload-progress-block");
+  const progress = document.getElementById("upload-progress");
+  const hint = document.getElementById("upload-progress-hint");
+  const batchHint = document.getElementById("upload-batch-hint");
+  const bar = document.getElementById("upload-progress-bar");
+  if (block) block.hidden = false;
+  if (progress) {
+    progress.hidden = false;
+    progress.textContent = label;
+  }
+  if (hint) hint.hidden = false;
+  if (batchHint) batchHint.hidden = false;
+  if (bar) bar.style.width = `${Math.max(0, Math.min(100, Math.round(ratio * 100)))}%`;
+}
+
+function hideUploadProgressUi() {
+  const block = document.getElementById("upload-progress-block");
+  if (block) block.hidden = true;
+  const bar = document.getElementById("upload-progress-bar");
+  if (bar) bar.style.width = "0%";
 }
 
 async function handleContactFileSelected(file) {
@@ -4890,8 +5075,63 @@ async function handleContactFileSelected(file) {
     }
     return;
   }
+  if ((preview?.total ?? 0) > CONTACT_UPLOAD_MAX_ROWS) {
+    state.ui.contactUploadPreview = null;
+    render();
+    const errBox = document.getElementById("upload-errors");
+    if (errBox) errBox.innerHTML = `<p class="error">${escapeHtml(errorMessage("file_too_large"))}</p>`;
+    return;
+  }
   state.ui.contactUploadPreview = preview;
   render();
+}
+
+/**
+ * FE-238: первая загрузка в пустую кампанию — JSON-пачки; со 2-й пачки ?mode=live.
+ * Догрузка / после старта сюда не ходит (там draft multipart).
+ */
+async function uploadContactsInChunks(camp, rows) {
+  state.ui.uploadCancelRequested = false;
+  let acceptedTotal = 0;
+  const rejected = [];
+  const warnings = [];
+  const totalChunks = Math.max(1, Math.ceil(rows.length / CONTACT_UPLOAD_CHUNK_SIZE));
+
+  for (let i = 0; i < rows.length; i += CONTACT_UPLOAD_CHUNK_SIZE) {
+    if (state.ui.uploadCancelRequested) {
+      return {
+        accepted: acceptedTotal,
+        rejected,
+        warnings,
+        cancelled: true,
+        chunksDone: Math.floor(i / CONTACT_UPLOAD_CHUNK_SIZE),
+        totalChunks,
+      };
+    }
+    const chunk = rows.slice(i, i + CONTACT_UPLOAD_CHUNK_SIZE);
+    const chunkIndex = Math.floor(i / CONTACT_UPLOAD_CHUNK_SIZE);
+    const q = chunkIndex === 0 ? "" : "?mode=live";
+    setUploadProgressUi({
+      ratio: chunkIndex / totalChunks,
+      label: `Загружаем контакты… (${chunkIndex + 1}/${totalChunks})`,
+    });
+    const result = await apiFetch(
+      `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/upload${q}`,
+      {
+        method: "POST",
+        session: state.session,
+        body: { rows: chunk },
+      }
+    );
+    acceptedTotal += Number(result?.accepted) || 0;
+    if (Array.isArray(result?.rejected)) rejected.push(...result.rejected);
+    if (Array.isArray(result?.warnings)) warnings.push(...result.warnings);
+    setUploadProgressUi({
+      ratio: (chunkIndex + 1) / totalChunks,
+      label: `Загружаем контакты… (${chunkIndex + 1}/${totalChunks})`,
+    });
+  }
+  return { accepted: acceptedTotal, rejected, warnings, cancelled: false, totalChunks };
 }
 
 async function uploadContactsFile(file, { skipPreview = false } = {}) {
@@ -4903,30 +5143,43 @@ async function uploadContactsFile(file, { skipPreview = false } = {}) {
   const camp = workspaceCampaign() || activeCampaign();
   if (!camp) return;
 
+  const preview = await previewContactsFile(file);
+  if (preview?.error === "format") {
+    const errBox = document.getElementById("upload-errors");
+    if (errBox) errBox.innerHTML = `<p class="error">${escapeHtml(errorMessage("unsupported_format"))}</p>`;
+    return;
+  }
+  if (preview?.error === "no_phone_col") {
+    const errBox = document.getElementById("upload-errors");
+    if (errBox) {
+      errBox.innerHTML = `<p class="error">Не нашли столбец с телефоном</p><p class="hint">Нужен столбец phone, телефон или номер</p>`;
+    }
+    return;
+  }
+
+  const rowCount = preview?.total ?? preview?.good?.length ?? 0;
+  if (rowCount > CONTACT_UPLOAD_MAX_ROWS) {
+    const errBox = document.getElementById("upload-errors");
+    if (errBox) errBox.innerHTML = `<p class="error">${escapeHtml(errorMessage("file_too_large"))}</p>`;
+    return;
+  }
+
+  const useDraftFlow = Boolean((camp.contacts || []).length) || isStarted(camp) || Boolean(camp.ever_started);
+
   state.ui.contactsUploading = true;
-  // Paint progress before long fetch so UI does not look frozen (FE-161).
+  state.ui.uploadCancelRequested = false;
   render();
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-  const progress = document.getElementById("upload-progress");
-  const hint = document.getElementById("upload-progress-hint");
-  const batchHint = document.getElementById("upload-batch-hint");
   const ok = document.getElementById("upload-ok");
   const errors = document.getElementById("upload-errors");
-  if (progress) {
-    progress.hidden = false;
-    progress.textContent = "Загружаем контакты…";
-  }
-  if (hint) hint.hidden = false;
-  if (batchHint) batchHint.hidden = false;
   if (ok) ok.hidden = true;
   if (errors) errors.innerHTML = "";
+  setUploadProgressUi({ ratio: 0 });
 
   if (!hasApi()) {
     state.ui.contactsUploading = false;
-    if (progress) progress.hidden = true;
-    if (hint) hint.hidden = true;
-    const preview = state.ui.contactUploadPreview;
+    hideUploadProgressUi();
     if (preview?.good?.length) {
       camp.contacts = [...(camp.contacts || []), ...preview.good];
       state.ui.contactsEmptyAfterPurge = false;
@@ -4947,25 +5200,51 @@ async function uploadContactsFile(file, { skipPreview = false } = {}) {
   }
 
   try {
-    const fd = new FormData();
-    fd.append("file", file, file.name);
-    const result = await apiFetch(
-      `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/upload`,
-      { method: "POST", session: state.session, body: fd }
-    );
-    state.ui.contactsUploading = false;
-    if (progress) progress.hidden = true;
-    if (hint) hint.hidden = true;
-    if (batchHint) batchHint.hidden = true;
-    if (result?.mode === "draft") {
+    if (useDraftFlow) {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const result = await apiFetch(
+        `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/upload`,
+        { method: "POST", session: state.session, body: fd }
+      );
+      state.ui.contactsUploading = false;
+      hideUploadProgressUi();
+      if (result?.mode === "draft") {
+        render();
+        showServerReloadDraft(camp, result);
+        return;
+      }
+      const rejected = result?.rejected || [];
+      const warnings = result?.warnings || [];
+      if (rejected.length && errors) {
+        errors.innerHTML = rejected
+          .slice(0, 8)
+          .map(
+            (r) =>
+              `<p class="error">${escapeHtml(typeof r === "string" ? r : r.reason || r.code || "Строка отклонена")}</p>`
+          )
+          .join("");
+      }
+      if (warnings.length) {
+        camp.uploadWarnings = warnings.map((w) => (typeof w === "string" ? w : w.message || String(w)));
+      }
+      await refreshCampaignContacts(camp);
       render();
-      showServerReloadDraft(camp, result);
+      const okEl = document.getElementById("upload-ok");
+      if (okEl) {
+        okEl.hidden = false;
+        okEl.textContent =
+          result?.accepted != null ? `Контакты загружены: ${result.accepted}` : "Контакты загружены";
+      }
       return;
     }
-    const rejected = result?.rejected || [];
-    const warnings = result?.warnings || [];
-    if (rejected.length && errors) {
-      errors.innerHTML = rejected
+
+    const rows = (preview.good || []).map(contactRowForUpload);
+    const result = await uploadContactsInChunks(camp, rows);
+    state.ui.contactsUploading = false;
+    hideUploadProgressUi();
+    if (result.rejected?.length && errors) {
+      errors.innerHTML = result.rejected
         .slice(0, 8)
         .map(
           (r) =>
@@ -4973,19 +5252,24 @@ async function uploadContactsFile(file, { skipPreview = false } = {}) {
         )
         .join("");
     }
-    if (warnings.length) {
-      camp.uploadWarnings = warnings.map((w) => (typeof w === "string" ? w : w.message || String(w)));
+    if (result.warnings?.length) {
+      camp.uploadWarnings = result.warnings.map((w) => (typeof w === "string" ? w : w.message || String(w)));
     }
     await refreshCampaignContacts(camp);
     render();
     const okEl = document.getElementById("upload-ok");
     if (okEl) {
       okEl.hidden = false;
-      okEl.textContent =
-        result?.accepted != null ? `Контакты загружены: ${result.accepted}` : "Контакты загружены";
+      if (result.cancelled) {
+        okEl.textContent = `Загрузка остановлена. Уже принято: ${result.accepted}`;
+      } else {
+        okEl.textContent =
+          result.accepted != null ? `Контакты загружены: ${result.accepted}` : "Контакты загружены";
+      }
     }
   } catch (ex) {
     state.ui.contactsUploading = false;
+    hideUploadProgressUi();
     render();
     const errBox = document.getElementById("upload-errors");
     const code = ex?.code;
@@ -5328,6 +5612,7 @@ function bindStatuses() {
               attempts: card.attempts || ct.attempts || [],
               last_transcript: card.last_transcript ?? ct.last_transcript,
               transcript: card.last_transcript || card.transcript || ct.transcript,
+              last_attempt_outcome: card.last_attempt_outcome ?? ct.last_attempt_outcome,
             });
             persistCampaigns();
           } catch (ex) {
@@ -5352,27 +5637,7 @@ function bindStatuses() {
       const camp = workspaceCampaign() || activeCampaign();
       if (hasApi() && camp) {
         try {
-          const q =
-            next && next !== "all"
-              ? `?status=${encodeURIComponent(STATUS[next] || next)}`
-              : "";
-          const data = await apiFetch(
-            `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts${q}`,
-            { session: state.session }
-          );
-          camp.contacts = (data?.items || []).map((item) => ({
-            id: item.id,
-            phone: item.phone,
-            status: item.status || STATUS.in_progress,
-            attrs: item.attrs || {},
-            verdict: item.verdict ?? null,
-            attempts:
-              item.attempts ||
-              (item.last_attempt ? [item.last_attempt] : []),
-            last_attempt: item.last_attempt || null,
-            cause_code: item.cause_code || null,
-          }));
-          persistCampaigns();
+          await reloadCampaignContactsList(camp);
         } catch (ex) {
           flash(errorMessage(ex?.code), "error");
         }
@@ -5381,9 +5646,60 @@ function bindStatuses() {
     };
   });
   document.querySelectorAll("[data-outcome-filter]").forEach((btn) => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       state.ui.contactOutcomeFilter = btn.getAttribute("data-outcome-filter") || "all";
+      const camp = workspaceCampaign() || activeCampaign();
+      if (hasApi() && camp) {
+        try {
+          await reloadCampaignContactsList(camp);
+        } catch (ex) {
+          flash(errorMessage(ex?.code), "error");
+        }
+      }
       render();
+    };
+  });
+  document.querySelectorAll("[data-contact-attrs-id]").forEach((form) => {
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      if (locked()) return;
+      const camp = workspaceCampaign() || activeCampaign();
+      const cid = form.getAttribute("data-contact-attrs-id");
+      if (!hasApi() || !camp?.id || !cid) return;
+      const attrs = {};
+      form.querySelectorAll("input[name]").forEach((inp) => {
+        attrs[inp.name] = inp.value;
+      });
+      const msg = form.querySelector(".contact-attrs-msg");
+      try {
+        const updated = await apiFetch(
+          `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(cid)}`,
+          { method: "PATCH", session: state.session, body: { attrs } }
+        );
+        const ct = (camp.contacts || []).find((c) => c.id === cid);
+        if (ct) {
+          ct.attrs = updated?.attrs || attrs;
+          if (attrs.name != null) ct.name = attrs.name;
+        }
+        persistCampaigns();
+        await refreshGates(camp).catch(() => {});
+        if (msg) {
+          msg.hidden = false;
+          msg.textContent = "Поля сохранены";
+          msg.classList.remove("error");
+        } else {
+          flash("Поля сохранены");
+        }
+        render();
+      } catch (ex) {
+        if (msg) {
+          msg.hidden = false;
+          msg.textContent = "Не удалось выполнить действие. Попробуйте ещё раз.";
+          msg.classList.add("error");
+        } else {
+          flash(errorMessage(ex?.code), "error");
+        }
+      }
     };
   });
 }
