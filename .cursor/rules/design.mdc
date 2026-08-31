@@ -1,0 +1,57 @@
+---
+description: CallMate design system — tokens, spacing, density, anti-patterns for vanilla SPA (app.js + styles.css). Copy this pack from New docs/handoff/fe/callmate-cursor-pack to Callmate repo root.
+globs:
+  - "**/*.css"
+  - "**/*.js"
+  - "**/*.html"
+alwaysApply: false
+---
+
+# CallMate design rules (Cursor)
+
+Read `.interface-design/system.md` before visual changes.
+
+## Stack
+
+Vanilla hash-SPA. **No** React, Tailwind, bundler migration in visual tasks.
+
+## Tokens (mandatory)
+
+- Spacing: only `--space-1` (4px) through `--space-6` (32px)
+- Colors: CSS variables from system.md — never hardcoded hex except in `:root` theme defs
+- Fonts: `--display` (Syne) headings; `--font` (Manrope) UI
+
+## Layout
+
+- Prefer `display: flex` or `grid` with `gap: var(--space-N)` — not margin stacks
+- One panel depth per block (`--surface`); nested `--surface-2` without shadow
+- Flex for 1D rows; Grid for readiness strip, tables, admin density
+
+## Components
+
+- Import/reuse existing classes — don't duplicate button/panel styles
+- Primary CTA: one per zone, `--accent`
+- Touch targets ≥ 44×44px
+- Tables: `font-variant-numeric: tabular-nums`
+
+## Accessibility
+
+- Semantic `button`, `label`+`input`, visible `:focus-visible`
+- `aria-label` on icon-only controls
+- Status readable without color alone
+
+## Forbidden
+
+- Purple AI glow, neon shadows, cream/terracotta palette
+- Card-in-card, decorative cards, stat pill clusters
+- Arbitrary px (10, 14, 20…) outside token scale
+- Rewriting UI copy — strings from handoff/ux-write-design only
+
+## Motion
+
+- Transition `transform`, `opacity` — not `width`/`height`
+- Honor `prefers-reduced-motion: reduce`
+
+## SEO note
+
+Public landing HTML: unique title/description per page. Authenticated `#/` routes: not for indexing.
