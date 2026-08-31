@@ -36,10 +36,13 @@ export const ERROR_MESSAGES = {
   revision_conflict: "Данные устарели — обновите страницу и повторите",
   invalid_provider: "Такой провайдер недоступен",
   invalid_model: "Выберите модель из списка",
+  invalid_mode: "Недопустимая комбинация режима",
+  invalid_field: "Проверьте поля",
   custom_endpoint_forbidden: "Свой адрес сервера указать нельзя",
   secret_not_configured: "Сначала запишите API-ключ",
   secret_store_unavailable: "Хранилище ключей недоступно",
   provider_unavailable: "Провайдер недоступен. Попробуйте позже",
+  timeout: "Провайдер не ответил вовремя. Попробуйте ещё раз",
   check_failed: "Проверка не прошла",
   not_configured: "Сначала сохраните настройки",
   sip_auth_failed: "Не приняли логин или пароль. Проверьте данные",
@@ -52,6 +55,9 @@ export const ERROR_MESSAGES = {
   api_not_configured: "Сначала укажите адрес API",
   request_failed: "Что-то пошло не так. Попробуйте ещё раз",
   server: "Что-то пошло не так. Попробуйте ещё раз",
+  /** Integrations test: key rejected (do not reuse login copy). */
+  integration_auth_failed: "Провайдер отклонил ключ",
+  integration_network: "Не удалось связаться с сервером",
   generate_failed:
     "Не удалось собрать сценарий. Проверьте цель и сведения и сохраните ещё раз.",
   provider_down:

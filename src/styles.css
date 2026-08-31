@@ -2025,6 +2025,30 @@ button.linkish:hover { text-decoration: underline; }
   padding-left: 1.1rem;
 }
 
+.admin-integrations {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.admin-llm-slice h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.admin-llm-lab {
+  margin-left: 0;
+}
+.admin-llm-lab-hint {
+  margin-top: 0.25rem;
+}
+.admin-llm-actions {
+  margin-top: 0;
+}
+.admin-llm-asr-note {
+  margin-top: 0.5rem;
+}
+
 .check-line {
   display: flex;
   align-items: flex-start;
