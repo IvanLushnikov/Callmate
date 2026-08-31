@@ -1,0 +1,14 @@
+{
+  "name": "callmate",
+  "private": true,
+  "description": "Callmate cabinet UI (static)",
+  "scripts": {
+    "dev": "python3 scripts/dev-server.py 8765",
+    "serve:static": "python3 -m http.server 8765 --bind 127.0.0.1",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test e2e/smoke.spec.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}

@@ -1662,6 +1662,11 @@ button.ready-cell:hover {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
 }
 
+.status-filter:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
 .status-filter.active {
   color: var(--ink);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
@@ -4379,13 +4384,18 @@ label {
 }
 
 .tariff-row-current td {
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
   font-weight: 600;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .billing-cta {
   padding: var(--space-5);
   margin-top: var(--space-4);
+}
+
+.data-contacts .status-badge {
+  white-space: nowrap;
 }
 
 .results-placeholder {
