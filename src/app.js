@@ -94,9 +94,9 @@ const ADMIN_TABS = [
   { id: "settings", label: "Настройки", href: "#/admin/settings" },
 ];
 
-function loadJson(key, fallback) {
+function loadJson(key, fallback, store = localStorage) {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = store.getItem(key);
     if (!raw) return fallback;
     return JSON.parse(raw);
   } catch {
@@ -104,8 +104,35 @@ function loadJson(key, fallback) {
   }
 }
 
-function saveJson(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+function saveJson(key, value, store = localStorage) {
+  store.setItem(key, JSON.stringify(value));
+}
+
+/** Session bearer is a secret (ARCH-108): sessionStorage only, never localStorage. */
+function readSessionToken() {
+  try {
+    const fromSession = sessionStorage.getItem("cm_session") || "";
+    if (fromSession) return fromSession;
+    // One-shot migrate away from legacy localStorage leak.
+    const legacy = localStorage.getItem("cm_session") || "";
+    if (legacy) {
+      sessionStorage.setItem("cm_session", legacy);
+      localStorage.removeItem("cm_session");
+    }
+    return legacy;
+  } catch {
+    return "";
+  }
+}
+
+function writeSessionToken(token) {
+  try {
+    if (token) sessionStorage.setItem("cm_session", token);
+    else sessionStorage.removeItem("cm_session");
+    localStorage.removeItem("cm_session");
+  } catch {
+    /* private mode / blocked storage */
+  }
 }
 
 function ensureCompanyIds(list) {
@@ -125,11 +152,11 @@ function ensureCompanyIds(list) {
 }
 
 const state = {
-  session: localStorage.getItem("cm_session") || "",
+  session: readSessionToken(),
   role: localStorage.getItem("cm_role") || "",
   theme: localStorage.getItem("cm_theme") || "light",
   companyLocked: localStorage.getItem("cm_locked") === "1",
-  impersonate: loadJson("cm_impersonate", null),
+  impersonate: loadJson("cm_impersonate", null, sessionStorage) || loadJson("cm_impersonate", null),
   companies: ensureCompanyIds(loadJson("cm_companies", [])),
   campaigns: loadJson("cm_campaigns", []),
   telephony: loadJson("cm_telephony", {
@@ -3680,6 +3707,11 @@ function bindShell() {
         flash(errorMessage(ex?.code), "error");
       }
       state.impersonate = null;
+      try {
+        sessionStorage.removeItem("cm_impersonate");
+      } catch {
+        /* ignore */
+      }
       localStorage.removeItem("cm_impersonate");
       state.ui.adminLoaded = false;
       navigate("/admin");
@@ -4102,10 +4134,12 @@ function bindAdminForms() {
             impersonated_company_id: res.company_id,
           });
           state.impersonate = { id: c.id, name: c.name, companyId: c.id };
-          saveJson("cm_impersonate", state.impersonate);
+          saveJson("cm_impersonate", state.impersonate, sessionStorage);
+          localStorage.removeItem("cm_impersonate");
         } else {
           state.impersonate = { id: c.id, name: c.name };
-          saveJson("cm_impersonate", state.impersonate);
+          saveJson("cm_impersonate", state.impersonate, sessionStorage);
+          localStorage.removeItem("cm_impersonate");
           state.companyLocked = c.access_status === "locked";
         }
         navigate("/cabinet/campaigns");
@@ -6046,9 +6080,10 @@ function applySessionPayload(data) {
   state.companyLocked = Boolean(data.company_locked);
   if (data.impersonated_company_id) {
     state.impersonate = { companyId: data.impersonated_company_id };
-    localStorage.setItem("cm_impersonate", JSON.stringify(state.impersonate));
+    saveJson("cm_impersonate", state.impersonate, sessionStorage);
+    localStorage.removeItem("cm_impersonate");
   }
-  localStorage.setItem("cm_session", state.session);
+  writeSessionToken(state.session);
   localStorage.setItem("cm_role", state.role);
   localStorage.setItem("cm_locked", state.companyLocked ? "1" : "0");
 }
@@ -6073,6 +6108,12 @@ function clearSession() {
   state.ui.adminLoaded = false;
   state.ui.telephonyLoaded = false;
   state.ui.campaignsLoaded = false;
+  writeSessionToken("");
+  try {
+    sessionStorage.removeItem("cm_impersonate");
+  } catch {
+    /* ignore */
+  }
   localStorage.removeItem("cm_session");
   localStorage.removeItem("cm_role");
   localStorage.removeItem("cm_locked");
