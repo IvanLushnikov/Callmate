@@ -191,13 +191,50 @@ const state = {
       model: "google/gemma-4-31b-it:free",
       enabled: true,
       runtime_mode: "live",
-      secret: "",
     },
     busy: false,
     error: "",
     ok: "",
   },
 };
+
+/** Allowed enabled+runtime_mode pairs for platform LLM (public API allowlist). */
+const LLM_MODE_PAIRS = [
+  { enabled: false, runtime_mode: "stub", label: "Выключен · stub" },
+  { enabled: true, runtime_mode: "stub", label: "Включён · stub" },
+  { enabled: true, runtime_mode: "live", label: "Включён · live" },
+];
+
+function llmProviderIsLab(providerKind) {
+  const providers = (state.adminIntegrations.catalog && state.adminIntegrations.catalog.llm) || [];
+  const match = providers.find((p) => p.provider_kind === providerKind);
+  if (match) return Boolean(match.lab);
+  return providerKind === "openrouter";
+}
+
+function llmModePairKey(enabled, runtimeMode) {
+  return `${enabled ? "1" : "0"}:${runtimeMode || "stub"}`;
+}
+
+function parseLlmModePairKey(key) {
+  const pair = LLM_MODE_PAIRS.find((p) => llmModePairKey(p.enabled, p.runtime_mode) === key);
+  return pair || LLM_MODE_PAIRS[LLM_MODE_PAIRS.length - 1];
+}
+
+function llmCheckErrorText(code) {
+  if (!code) return "Проверка не прошла";
+  if (code === "auth_failed") return "Провайдер не принял ключ (auth_failed)";
+  if (code === "provider_unavailable") return "Провайдер недоступен (provider_unavailable)";
+  if (code === "secret_not_configured") return "Сначала запишите API-ключ";
+  if (ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
+  return `Проверка не прошла (${code})`;
+}
+
+function llmIntegrationsErrorText(code) {
+  if (code === "revision_conflict") return "Данные устарели — обновите страницу и повторите";
+  if (code === "request_failed" || code === "server") return "Не удалось связаться с сервером";
+  return errorMessage(code);
+}
 
 function persistCampaigns() {
   saveJson("cm_campaigns", state.campaigns);
@@ -877,21 +914,30 @@ function adminSettings() {
   </div>`;
 }
 
-function _llmSliceHtml(title, slice, { labBadge } = {}) {
+function _llmSliceHtml(title, slice, { emptyText } = {}) {
   if (!slice) {
-    return `<div class="panel"><h3>${escapeHtml(title)}</h3><p class="hint">LLM ещё не подключён</p></div>`;
+    return `<div class="panel" data-testid="admin-llm-slice-empty">
+      <h3>${escapeHtml(title)}</h3>
+      <p class="hint">${escapeHtml(emptyText || "LLM ещё не подключён")}</p>
+    </div>`;
   }
-  const lab =
-    labBadge || slice.provider_kind === "openrouter"
-      ? `<span class="hint" style="margin-left:0.5rem">Лаборатория</span>`
-      : "";
+  const lab = llmProviderIsLab(slice.provider_kind)
+    ? ` <span class="badge" title="Лаборатория / test">Лаборатория</span>`
+    : "";
   const check = slice.last_check || {};
-  return `<div class="panel">
+  const secretAt = slice.secret_changed_at
+    ? String(slice.secret_changed_at).replace("T", " ").slice(0, 19)
+    : "—";
+  const modeLabel = llmModePairKey(Boolean(slice.enabled), slice.runtime_mode);
+  const pair = parseLlmModePairKey(modeLabel);
+  return `<div class="panel" data-testid="admin-llm-slice">
     <h3>${escapeHtml(title)}${lab}</h3>
     <p>Провайдер: <strong>${escapeHtml(slice.provider_kind || "—")}</strong></p>
     <p>Модель: ${escapeHtml(slice.model || "—")}</p>
     <p class="hint">Endpoint: ${escapeHtml(slice.endpoint || "—")}</p>
-    <p>Ключ: ${slice.has_secret ? "задан" : "нет"} · ревизия ${escapeHtml(String(slice.revision_no ?? "—"))}</p>
+    <p class="hint">Протокол: ${escapeHtml(slice.protocol || "—")}</p>
+    <p>Режим: ${escapeHtml(pair.label)} · состояние ${escapeHtml(slice.state || "—")}</p>
+    <p>Ключ: ${slice.has_secret ? "да" : "нет"}${slice.has_secret ? ` · смена ${escapeHtml(secretAt)}` : ""} · ревизия ${escapeHtml(String(slice.revision_no ?? "—"))}</p>
     <p class="hint">Проверка: ${escapeHtml(check.status || "—")}${check.error_code ? ` (${escapeHtml(check.error_code)})` : ""}</p>
   </div>`;
 }
@@ -916,29 +962,46 @@ function adminIntegrationsPanel() {
       return `<option value="${escapeHtml(m)}"${sel}>${escapeHtml(m)}</option>`;
     })
     .join("");
+  const modeKey = llmModePairKey(Boolean(form.enabled), form.runtime_mode || "live");
+  const modeOpts = LLM_MODE_PAIRS.map((p) => {
+    const key = llmModePairKey(p.enabled, p.runtime_mode);
+    const sel = key === modeKey ? " selected" : "";
+    return `<option value="${escapeHtml(key)}"${sel}>${escapeHtml(p.label)}</option>`;
+  }).join("");
   const disabled = ai.busy ? " disabled" : "";
-  return `<div>
-    ${_llmSliceHtml("Активная конфигурация", llmItem.active)}
-    ${llmItem.candidate ? _llmSliceHtml("Черновик", llmItem.candidate, { labBadge: llmItem.candidate.provider_kind === "openrouter" }) : ""}
+  const selectedLab = selected && selected.lab
+    ? ` <span class="badge" title="Лаборатория / test">Лаборатория</span>`
+    : "";
+  return `<div id="sec-admin-llm">
+    ${_llmSliceHtml("Активная конфигурация", llmItem.active, {
+      emptyText: llmItem.active || llmItem.candidate ? "Провайдер не подключён" : "LLM ещё не подключён",
+    })}
+    ${
+      llmItem.candidate
+        ? _llmSliceHtml("Черновик", llmItem.candidate)
+        : ""
+    }
     <form class="panel" id="admin-llm-meta-form" style="margin-top:1rem">
-      <h3>Языковая модель</h3>
-      <label>Провайдер</label>
+      <h3>Языковая модель${selectedLab}</h3>
+      <label for="admin-llm-provider">Провайдер</label>
       <select id="admin-llm-provider"${disabled}>${providerOpts || '<option value="">Нет вариантов</option>'}</select>
-      <label>Модель</label>
+      <label for="admin-llm-model">Модель</label>
       <select id="admin-llm-model"${disabled}>${modelOpts || '<option value="">—</option>'}</select>
+      <label for="admin-llm-mode">Режим</label>
+      <select id="admin-llm-mode"${disabled}>${modeOpts}</select>
       <p class="hint">URL задаёт сервер. Свой адрес ввести нельзя.</p>
       <div class="error" id="admin-llm-error" ${ai.error ? "" : "hidden"}>${escapeHtml(ai.error || "")}</div>
       <p class="hint ok-line" id="admin-llm-ok" ${ai.ok ? "" : "hidden"}>${escapeHtml(ai.ok || "")}</p>
       <button class="btn" type="submit"${disabled}>Сохранить настройки</button>
     </form>
     <form class="panel" id="admin-llm-secret-form" style="margin-top:1rem">
-      <label>API-ключ</label>
-      <input id="admin-llm-secret" type="password" autocomplete="new-password" value=""${disabled} />
+      <label for="admin-llm-secret">API-ключ</label>
+      <input id="admin-llm-secret" type="password" autocomplete="new-password" value="" name="admin-llm-secret"${disabled} />
       <p class="hint">Ключ сохраняется только при записи. Просмотреть нельзя.</p>
       <button class="btn secondary" type="submit"${disabled}>Записать ключ</button>
     </form>
     <div class="row-actions" style="margin-top:1rem">
-      <button class="btn" type="button" id="admin-llm-test"${disabled}>Проверить и включить</button>
+      <button class="btn" type="button" id="admin-llm-test"${disabled}>${ai.busy && ai.ok === "Проверяем…" ? "Проверяем…" : "Проверить и включить"}</button>
     </div>
     <p class="hint" style="margin-top:1.5rem">ASR / TTS — скоро</p>
   </div>`;
@@ -951,10 +1014,21 @@ async function refreshAdminIntegrations() {
   state.adminIntegrations.catalog = data.catalog || { llm: [], asr: [], tts: [] };
   state.adminIntegrations.secret_management = data.secret_management || null;
   state.adminIntegrations.loaded = true;
+  const llmItem = (state.adminIntegrations.items || []).find((i) => i.kind === "llm") || {};
+  const seed = llmItem.candidate || llmItem.active;
   const llmProviders = state.adminIntegrations.catalog.llm || [];
+  if (seed) {
+    state.adminIntegrations.form.provider_kind = seed.provider_kind || state.adminIntegrations.form.provider_kind;
+    state.adminIntegrations.form.model = seed.model || state.adminIntegrations.form.model;
+    if (typeof seed.enabled === "boolean") state.adminIntegrations.form.enabled = seed.enabled;
+    if (seed.runtime_mode) state.adminIntegrations.form.runtime_mode = seed.runtime_mode;
+  }
   if (llmProviders.length) {
     const current = state.adminIntegrations.form.provider_kind;
-    const match = llmProviders.find((p) => p.provider_kind === current) || llmProviders.find((p) => p.lab) || llmProviders[0];
+    const match =
+      llmProviders.find((p) => p.provider_kind === current) ||
+      llmProviders.find((p) => !p.lab) ||
+      llmProviders[0];
     state.adminIntegrations.form.provider_kind = match.provider_kind;
     const models = match.models || [];
     if (!models.includes(state.adminIntegrations.form.model)) {
@@ -4241,6 +4315,7 @@ function bindAdminForms() {
 function bindAdminIntegrations() {
   const providerSel = document.getElementById("admin-llm-provider");
   const modelSel = document.getElementById("admin-llm-model");
+  const modeSel = document.getElementById("admin-llm-mode");
   if (providerSel) {
     providerSel.onchange = () => {
       state.adminIntegrations.form.provider_kind = providerSel.value;
@@ -4254,6 +4329,13 @@ function bindAdminIntegrations() {
   if (modelSel) {
     modelSel.onchange = () => {
       state.adminIntegrations.form.model = modelSel.value;
+    };
+  }
+  if (modeSel) {
+    modeSel.onchange = () => {
+      const pair = parseLlmModePairKey(modeSel.value);
+      state.adminIntegrations.form.enabled = pair.enabled;
+      state.adminIntegrations.form.runtime_mode = pair.runtime_mode;
     };
   }
 
@@ -4280,6 +4362,15 @@ function bindAdminIntegrations() {
     }
   }
 
+  async function handleRevisionConflict() {
+    try {
+      await refreshAdminIntegrations();
+    } catch {
+      /* keep conflict message even if refresh fails */
+    }
+    setFeedback("Данные устарели — обновите страницу и повторите", "");
+  }
+
   const metaForm = document.getElementById("admin-llm-meta-form");
   if (metaForm) {
     metaForm.onsubmit = async (e) => {
@@ -4288,14 +4379,21 @@ function bindAdminIntegrations() {
         setFeedback("Сначала укажите адрес API", "");
         return;
       }
+      const modePair = parseLlmModePairKey(
+        (document.getElementById("admin-llm-mode") || {}).value ||
+          llmModePairKey(state.adminIntegrations.form.enabled, state.adminIntegrations.form.runtime_mode)
+      );
+      state.adminIntegrations.form.enabled = modePair.enabled;
+      state.adminIntegrations.form.runtime_mode = modePair.runtime_mode;
       state.adminIntegrations.busy = true;
       setFeedback("", "");
+      render();
       try {
         const body = {
           provider_kind: document.getElementById("admin-llm-provider").value,
           model: document.getElementById("admin-llm-model").value,
-          enabled: true,
-          runtime_mode: "live",
+          enabled: modePair.enabled,
+          runtime_mode: modePair.runtime_mode,
           ...expectedRevisions(),
         };
         await apiFetch("/api/admin/integrations/llm", {
@@ -4304,18 +4402,18 @@ function bindAdminIntegrations() {
           body,
         });
         await refreshAdminIntegrations();
+        state.adminIntegrations.busy = false;
         setFeedback("", "Настройки сохранены");
         render();
       } catch (ex) {
         const code = ex?.code;
-        setFeedback(
-          code === "revision_conflict"
-            ? "Данные устарели — обновите страницу и повторите"
-            : errorMessage(code),
-          ""
-        );
-      } finally {
         state.adminIntegrations.busy = false;
+        if (code === "revision_conflict") {
+          await handleRevisionConflict();
+        } else {
+          setFeedback(llmIntegrationsErrorText(code), "");
+        }
+        render();
       }
     };
   }
@@ -4336,6 +4434,9 @@ function bindAdminIntegrations() {
       }
       state.adminIntegrations.busy = true;
       setFeedback("", "");
+      if (input) input.disabled = true;
+      const secretBtn = secretForm.querySelector('button[type="submit"]');
+      if (secretBtn) secretBtn.disabled = true;
       try {
         await apiFetch("/api/admin/integrations/llm/secret", {
           method: "POST",
@@ -4343,25 +4444,21 @@ function bindAdminIntegrations() {
           body: { secret, ...expectedRevisions() },
         });
         if (input) input.value = "";
-        state.adminIntegrations.form.secret = "";
         await refreshAdminIntegrations();
+        state.adminIntegrations.busy = false;
         setFeedback("", "Ключ записан");
         render();
-        const ok = document.getElementById("admin-llm-ok");
-        if (ok) {
-          ok.hidden = false;
-          ok.textContent = "Ключ записан";
-        }
       } catch (ex) {
         const code = ex?.code;
-        setFeedback(
-          code === "revision_conflict"
-            ? "Данные устарели — обновите страницу и повторите"
-            : errorMessage(code),
-          ""
-        );
-      } finally {
         state.adminIntegrations.busy = false;
+        if (code === "revision_conflict") {
+          await handleRevisionConflict();
+          render();
+        } else {
+          setFeedback(llmIntegrationsErrorText(code), "");
+          if (input) input.disabled = false;
+          if (secretBtn) secretBtn.disabled = false;
+        }
       }
     };
   }
@@ -4381,6 +4478,7 @@ function bindAdminIntegrations() {
       }
       state.adminIntegrations.busy = true;
       setFeedback("", "Проверяем…");
+      render();
       try {
         const result = await apiFetch("/api/admin/integrations/llm/test", {
           method: "POST",
@@ -4388,22 +4486,22 @@ function bindAdminIntegrations() {
           body: { revision_no: rev.revision_no, activate_on_success: true },
         });
         await refreshAdminIntegrations();
+        state.adminIntegrations.busy = false;
         if (result.status === "passed") {
           setFeedback("", "Подключение проверено, конфигурация активна");
         } else {
-          setFeedback(errorMessage(result.error_code) || "Проверка не прошла", "");
+          setFeedback(llmCheckErrorText(result.error_code), "");
         }
         render();
       } catch (ex) {
         const code = ex?.code;
-        setFeedback(
-          code === "revision_conflict"
-            ? "Данные устарели — обновите страницу и повторите"
-            : errorMessage(code),
-          ""
-        );
-      } finally {
         state.adminIntegrations.busy = false;
+        if (code === "revision_conflict") {
+          await handleRevisionConflict();
+        } else {
+          setFeedback(llmIntegrationsErrorText(code), "");
+        }
+        render();
       }
     };
   }

@@ -36,6 +36,8 @@ export const ERROR_MESSAGES = {
   revision_conflict: "Данные устарели — обновите страницу и повторите",
   invalid_provider: "Такой провайдер недоступен",
   invalid_model: "Выберите модель из списка",
+  invalid_mode: "Выберите допустимый режим",
+  invalid_field: "Проверьте поля",
   custom_endpoint_forbidden: "Свой адрес сервера указать нельзя",
   secret_not_configured: "Сначала запишите API-ключ",
   secret_store_unavailable: "Хранилище ключей недоступно",
