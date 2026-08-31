@@ -1,7 +1,7 @@
 # CallMate — visual contract for agents
 
-**Product:** B2B voice campaigns cabinet + admin (CallMate).  
-**Stack:** vanilla hash-SPA — `app.js`, `styles.css`, `index.html`.  
+**Product:** B2B voice campaigns cabinet + admin (CallMate).
+**Stack:** vanilla hash-SPA — `app.js`, `styles.css`, `index.html`.
 **Not for:** marketing landing polish (use `public-seo` + `ux-write-design`).
 
 ## Intent
