@@ -34,7 +34,20 @@ const checks = [
   ["refreshRuntime", "W3-stub-live"],
   ["/api/cabinet/runtime", "W3-stub-live"],
   ["data-testid=\"dial-mode-banner\"", "W3-stub-live"],
-  ["Лабораторный режим", "W3-stub-live"],
+  ["Учебный режим — звонки имитируются", "W3-stub-live"],
+  ["Живые звонки через ваш SIP", "SIP-LIVE"],
+  ["mangoPartnerBlock", "SIP-LIVE"],
+  ["tel-partner-block", "SIP-LIVE"],
+  ["telephonyErrorText", "SIP-LIVE"],
+  ["sip_auth_failed", "SIP-LIVE"],
+  ["provider_down", "SIP-LIVE"],
+  ["telephony_not_ready", "SIP-LIVE"],
+  ["fetchHealth", "SIP-LIVE"],
+  ["isApiOnline", "SIP-LIVE"],
+  ["refreshApiReachability", "SIP-LIVE"],
+  ["mode: \"mango\"", "SIP-LIVE-absent"],
+  ["mangoFormInline", "SIP-LIVE-absent"],
+  ["data-open-tel=\"mango\"", "SIP-LIVE-absent"],
   ["analyticsCostFromSummary", "W4-analytics"],
   ["refreshAllCampaignAnalytics", "W4-analytics"],
   ["minutes * state.companyTariff", "W4-analytics-absent"],
@@ -42,7 +55,7 @@ const checks = [
 
 let failed = 0;
 for (const [needle, tag] of checks) {
-  if (tag === "W2-dial-absent" || tag === "W4-analytics-absent") {
+  if (tag === "W2-dial-absent" || tag === "W4-analytics-absent" || tag === "SIP-LIVE-absent") {
     if (appJs.includes(needle)) {
       console.error(`FAIL ${tag}: stale local fallback still present (${needle})`);
       failed += 1;

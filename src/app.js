@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession, verifyTotpLogin } from "./api.js";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession, verifyTotpLogin, fetchHealth } from "./api.js";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -15,19 +15,27 @@ const STATUS_LABEL = {
   [STATUS.cancel]: "Отмена",
 };
 
-/** FE-070 / DESIGN-079 — локальные SIP/валидации; API-коды → errorMessage() */
+/** SIP-LIVE — error_code → UI copy (handoff SIP-LIVE). */
 const ERROR_BY_CODE = {
   auth_failed: "Неверный логин или пароль",
   insufficient_balance: "Недостаточно средств",
-  company_locked: "Аккаунт заблокирован",
-  sip_error: "Не удалось подключить телефонию",
+  company_locked: "Аккаунт заблокирован — обратитесь в поддержку",
+  account_locked: "Аккаунт заблокирован — обратитесь в поддержку",
+  sip_error: "Не удалось проверить SIP. Попробуйте позже",
   validation: "Проверьте поля",
   server: "Что-то пошло не так. Попробуйте ещё раз",
-  sip_auth_failed: "Не приняли логин или пароль. Проверьте данные",
-  sip_network: "Нет связи с сервером телефонии. Проверьте адрес и сеть",
+  sip_invalid: "Заполните адрес SIP, логин и пароль",
+  sip_auth_failed: "Неверный логин или пароль SIP",
+  sip_network: "Не удалось связаться с вашей АТС. Проверьте адрес и доступность",
   sip_rejected: "Сервер телефонии отклонил подключение",
-  sip_unknown: "Не удалось подключить телефонию. Попробуйте ещё раз",
+  sip_unknown: "Не удалось проверить SIP. Попробуйте позже",
+  provider_down: "Телефония временно недоступна на сервере",
+  telephony_not_ready: "Сначала сохраните настройки SIP",
 };
+
+function telephonyErrorText(code) {
+  return ERROR_BY_CODE[code] || errorMessage(code) || ERROR_BY_CODE.sip_unknown;
+}
 
 /** FE-238 — пачки первой загрузки в пустую кампанию */
 const CONTACT_UPLOAD_CHUNK_SIZE = 2000;
@@ -169,14 +177,22 @@ const state = {
   impersonate: loadJson("scx_impersonate", null, sessionStorage) || loadJson("scx_impersonate", null),
   companies: ensureCompanyIds(loadJson("scx_companies", [])),
   campaigns: hasApi() ? [] : loadJson("scx_campaigns", []),
-  telephony: loadJson("scx_telephony", {
-    status: "unknown",
-    provider: null,
-    lines: null,
-    sipSaved: false,
-    lastError: null,
-    checking: false,
-  }),
+  telephony: (() => {
+    const defaults = {
+      status: "unknown",
+      provider: null,
+      lines: null,
+      sipSaved: false,
+      lastError: null,
+      checking: false,
+      has_sip_password: false,
+    };
+    const t = loadJson("scx_telephony", defaults);
+    if (hasApi() && t.status === "ok") {
+      return { ...defaults, ...t, status: "unknown" };
+    }
+    return { ...defaults, ...t };
+  })(),
   companyBalance: hasApi() ? null : Number(localStorage.getItem("scx_co_balance") || "500"),
   companyTariff: hasApi() ? null : Number(localStorage.getItem("scx_co_tariff") || "5"),
   activeCampaignId: localStorage.getItem("scx_active_campaign") || "",
@@ -191,6 +207,7 @@ const state = {
     contactsUploading: false,
     uploadCancelRequested: false,
     telephonyLoaded: false,
+    apiReachable: null,
     runtimeLoaded: false,
     cabinetMeLoaded: false,
     campaignsLoaded: false,
@@ -548,7 +565,7 @@ function telephonyOnboardingBlock() {
     <div class="onboard-block-copy">
       <p class="onboard-block-kicker">Первый шаг</p>
       <h3 class="onboard-block-title">Подключите телефонию — без неё обзвон не запустится</h3>
-      <p class="onboard-block-lead">SIP или Манго Телеком. Займёт пару минут, зато кампании смогут звонить клиентам.</p>
+      <p class="onboard-block-lead">Укажите SIP вашей АТС — займёт пару минут, зато кампании смогут звонить клиентам.</p>
     </div>
     <a class="btn onboard-block-cta" href="#/cabinet/integrations">Подключить телефонию</a>
   </div>`;
@@ -664,8 +681,16 @@ function locked() {
   return state.companyLocked && !state.impersonate;
 }
 
+function isApiOnline() {
+  return hasApi() && state.ui.apiReachable !== false;
+}
+
 function roAttr() {
   return locked() ? "disabled" : "";
+}
+
+function telActionAttr() {
+  return locked() || !isApiOnline() ? "disabled" : "";
 }
 
 function themeControls() {
@@ -699,7 +724,7 @@ function impersonateBanner() {
 
 /** Server/runtime dial mode — stub vs live_sip (wave 3 honesty). */
 function runtimeDialMode() {
-  if (!hasApi()) return "offline";
+  if (!isApiOnline()) return "offline";
   return state.runtime?.dial_mode || state.runtime?.adapters?.telephony || "unknown";
 }
 
@@ -722,19 +747,19 @@ function dialModeBannerHtml() {
   if (mode === "offline") {
     return `<div class="banner banner-warn dial-mode-banner" data-testid="dial-mode-banner" role="status">
       <strong>Кабинет без сервера</strong>
-      <p class="hint">Обзвон не запустится — данные хранятся только в этом браузере.</p>
+      <p class="hint">Сохранение и проверка SIP недоступны — сервер не отвечает.</p>
     </div>`;
   }
   if (mode === "stub") {
     return `<div class="banner banner-warn dial-mode-banner" data-testid="dial-mode-banner" role="status">
-      <strong>Лабораторный режим</strong>
-      <p class="hint">Звонки имитируются — реального дозвона нет. Статусы и транскрипты учебные.</p>
+      <strong>Учебный режим — звонки имитируются</strong>
+      <p class="hint">Реального дозвона нет. Статусы и транскрипты учебные.</p>
     </div>`;
   }
   if (mode === "live_sip") {
     return `<div class="banner banner-info dial-mode-banner" data-testid="dial-mode-banner" role="status">
-      <strong>Живые звонки</strong>
-      <p class="hint">Worker набирает через SIP. Результаты — с сервера.</p>
+      <strong>Живые звонки через ваш SIP</strong>
+      <p class="hint">Worker набирает через вашу АТС. Результаты — с сервера.</p>
     </div>`;
   }
   return "";
@@ -2490,7 +2515,7 @@ function telephonyStatusLine() {
       : "Телефония подключена";
   }
   if (t.status === "error") {
-    return ERROR_BY_CODE[t.lastError] || errorMessage(t.lastError) || ERROR_BY_CODE.sip_unknown;
+    return telephonyErrorText(t.lastError);
   }
   return "Телефония не подключена";
 }
@@ -3694,13 +3719,14 @@ function newCampaignFormInline() {
   </form>`;
 }
 
-function linesField(value, { standalone = true } = {}) {
+function linesField(value, { standalone = true, actionAttr = null } = {}) {
+  const dis = actionAttr ?? roAttr();
   const body = `
     <label>Число линий</label>
-    <input id="lines-input" type="number" min="1" placeholder="Например: 5" value="${escapeHtml(String(value))}" ${roAttr()} />
+    <input id="lines-input" type="number" min="1" placeholder="Например: 5" value="${escapeHtml(String(value))}" ${dis} />
     <p class="hint">Сколько одновременных звонков позволяет ваша телефония</p>
     <div class="error" id="lines-error" hidden></div>
-    ${standalone ? `<button class="btn secondary" type="submit" ${roAttr()}>Сохранить</button>` : ""}`;
+    ${standalone ? `<button class="btn secondary" type="submit" ${dis}>Сохранить</button>` : ""}`;
   if (!standalone) return `<div class="lines-block">${body}</div>`;
   return `<form id="lines-form" class="lines-block">${body}</form>`;
 }
@@ -3711,36 +3737,29 @@ function sipFormInline() {
   const pwdHint = state.telephony.has_sip_password
     ? `<p class="hint">Пароль уже сохранён. Введите новый, только если меняете</p>`
     : `<p class="hint">Пароль сохраним, но снова не покажем</p>`;
+  const canVerify = state.telephony.has_sip_password;
   return `<form class="panel nested" id="sip-form">
     <h3>SIP</h3>
-    <label>Адрес</label><input id="sip-host" placeholder="sip.example.com" value="${host}" ${roAttr()} />
-    <label>Логин</label><input id="sip-login" placeholder="Ваш логин" value="${login}" ${roAttr()} />
-    <label>Пароль</label><input id="sip-password" type="password" placeholder="Пароль" ${roAttr()} />
+    <label>Адрес</label><input id="sip-host" placeholder="sip.example.com" value="${host}" ${telActionAttr()} />
+    <label>Логин</label><input id="sip-login" placeholder="Ваш логин" value="${login}" ${telActionAttr()} />
+    <label>Пароль</label><input id="sip-password" type="password" placeholder="Пароль" ${telActionAttr()} />
     ${pwdHint}
-    ${linesField(state.telephony.lines != null ? state.telephony.lines : "", { standalone: false })}
+    ${linesField(state.telephony.lines != null ? state.telephony.lines : "", { standalone: false, actionAttr: telActionAttr() })}
     <div class="error" id="sip-error" hidden></div>
     <div class="row-actions">
-      <button class="btn" type="submit" ${roAttr()}>Сохранить</button>
-      <button class="btn secondary" type="button" id="sip-check" ${roAttr()}>Проверить подключение</button>
+      <button class="btn" type="submit" ${telActionAttr()}>Сохранить</button>
+      <button class="btn secondary" type="button" id="sip-check" ${telActionAttr()}${canVerify ? "" : ' disabled title="Сначала сохраните настройки SIP"'}>Проверить подключение</button>
       <button class="btn secondary" type="button" data-close-tel-panel>Свернуть</button>
     </div>
   </form>`;
 }
 
-function mangoFormInline() {
-  return `<form class="panel nested" id="mango-form">
-    <h3>Манго Телеком</h3>
-    <label>Логин</label><input id="mango-login" placeholder="Ваш логин" ${roAttr()} />
-    <label>Пароль</label><input id="mango-password" type="password" placeholder="Пароль" ${roAttr()} />
-    <p class="hint">Пароль сохраним, но снова не покажем</p>
-    ${linesField(state.telephony.lines != null ? state.telephony.lines : "", { standalone: false })}
-    <div class="error" id="mango-error" hidden></div>
-    <p class="hint ok-line" id="mango-ok" hidden>Телефония подключена</p>
-    <div class="row-actions">
-      <button class="btn" type="submit" ${roAttr()}>Подключить</button>
-      <button class="btn secondary" type="button" data-close-tel-panel>Свернуть</button>
-    </div>
-  </form>`;
+function mangoPartnerBlock() {
+  return `<div class="panel nested tel-partner-block" id="tel-partner-block">
+    <h3>Поможем подключить SIP через партнёра</h3>
+    <p class="hint">Если у вас АТС Манго Телеком или нужна помощь с настройкой — напишите в поддержку, подключим вместе.</p>
+    <a class="btn secondary" href="mailto:support@scorix.ru?subject=${encodeURIComponent("Подключение SIP")}">Связаться с поддержкой</a>
+  </div>`;
 }
 
 function sectionTelephony() {
@@ -3752,7 +3771,7 @@ function sectionTelephony() {
   const statusTitle = t.checking
     ? "Проверяем подключение…"
     : telOk
-      ? "Телефония подключена"
+      ? "SIP подключён"
       : telWarn
         ? "Не удалось подключить"
         : "Телефония не подключена";
@@ -3763,8 +3782,8 @@ function sectionTelephony() {
         ? `Линий для обзвона: ${t.lines}`
         : "Можно создавать кампанию и запускать обзвон"
       : telWarn
-        ? errorMessage(t.lastError) || ERROR_BY_CODE.sip_unknown
-        : "Подключите SIP или Манго Телеком";
+        ? telephonyErrorText(t.lastError)
+        : "Подключите SIP";
 
   let statusActions = "";
   if (telOk) {
@@ -3778,21 +3797,16 @@ function sectionTelephony() {
       </div>`;
   } else if (!t.checking) {
     statusActions = `<div class="tel-connect-grid">
-        <button class="tel-connect-card" type="button" data-open-tel="sip" ${roAttr()}>
+        <button class="tel-connect-card" type="button" data-open-tel="sip" ${telActionAttr()}>
           <span class="tel-connect-kicker">SIP</span>
           <strong class="tel-connect-title">Подключить SIP</strong>
           <span class="hint">Хост, логин и пароль вашей АТС</span>
         </button>
-        <button class="tel-connect-card" type="button" data-open-tel="mango" ${roAttr()}>
-          <span class="tel-connect-kicker">Манго</span>
-          <strong class="tel-connect-title">Подключить через Манго Телеком</strong>
-          <span class="hint">Логин и пароль от личного кабинета</span>
-        </button>
-      </div>`;
+      </div>
+      ${mangoPartnerBlock()}`;
   }
 
-  const expand =
-    panel === "sip" ? sipFormInline() : panel === "mango" ? mangoFormInline() : "";
+  const expand = panel === "sip" ? sipFormInline() : "";
 
   const body = `<div class="desk-stat-row desk-stat-row-1">
       ${deskStatCard(
@@ -3803,9 +3817,9 @@ function sectionTelephony() {
       )}
     </div>
     ${telWarn && !t.checking ? `<div class="banner banner-danger desk-banner"><strong>Не удалось подключить телефонию</strong><p class="hint">${escapeHtml(statusHint)}</p></div>` : ""}
-    ${hasApi() ? dialModeBannerHtml() : `<div class="banner banner-warn desk-banner" data-testid="dial-mode-banner"><strong>Без сервера</strong><p class="hint">Телефония сохранится только в браузере — проверка связи недоступна.</p></div>`}
+    ${hasApi() ? dialModeBannerHtml() : `<div class="banner banner-warn desk-banner dial-mode-banner" data-testid="dial-mode-banner"><strong>Кабинет без сервера</strong><p class="hint">Сохранение и проверка SIP недоступны.</p></div>`}
     ${statusActions}
-    ${t.checking ? "" : linesField(linesVal)}
+    ${t.checking ? "" : linesField(linesVal, { actionAttr: telActionAttr() })}
     ${expand ? `<div class="tel-form-expand">${expand}</div>` : ""}`;
 
   return deskPage("Интеграции", "Телефония и число линий для обзвона", body, { id: "sec-telephony" });
@@ -4207,6 +4221,9 @@ function launchBlockReasons(camp) {
     }
     return reasons;
   }
+  if (hasApi() && state.ui.apiReachable === false) {
+    reasons.push({ text: "Сервер недоступен — обзвон временно нельзя", action: "tel" });
+  }
   if (!(camp.contacts && camp.contacts.length)) reasons.push({ text: "Загрузите контакты", action: "contacts" });
   const missingCol = (camp.uploadWarnings || []).find((w) => w.includes("столбца") || w.includes("столбц"));
   if (missingCol) reasons.push({ text: "В файле нет столбца для поля сценария" });
@@ -4226,6 +4243,29 @@ function launchBlockReasons(camp) {
   if (isWeakScenario(camp) && camp.dial_state === "draft") reasons.push({ text: "Пока нельзя начать обзвон", weak: true });
   if (!hasApi()) reasons.push({ text: errorMessage("api_not_configured") });
   return reasons;
+}
+
+async function refreshApiReachability() {
+  if (!hasApi()) {
+    state.ui.apiReachable = false;
+    state.runtime = null;
+    return false;
+  }
+  const health = await fetchHealth();
+  if (!health.ok) {
+    state.ui.apiReachable = false;
+    state.runtime = null;
+    return false;
+  }
+  try {
+    await refreshRuntime();
+    state.ui.apiReachable = true;
+    return true;
+  } catch {
+    state.ui.apiReachable = false;
+    state.runtime = null;
+    return false;
+  }
 }
 
 async function refreshGates(camp) {
@@ -4603,10 +4643,11 @@ function render() {
     }
     if (hasApi() && !state.ui.runtimeLoaded && state.session && canCabinet) {
       state.ui.runtimeLoaded = true;
-      void refreshRuntime()
+      void refreshApiReachability()
         .then(() => render())
         .catch(() => {
           state.ui.runtimeLoaded = false;
+          state.ui.apiReachable = false;
         });
     }
     if (
@@ -6626,7 +6667,7 @@ function applyTelephonyPayload(p) {
   state.telephony = {
     ...state.telephony,
     status,
-    provider: p.mode || state.telephony.provider,
+    provider: "sip",
     lines: p.lines_limit != null ? p.lines_limit : state.telephony.lines,
     sipSaved: Boolean(p.has_sip_password || p.sip_host),
     has_sip_password: Boolean(p.has_sip_password),
@@ -6674,13 +6715,13 @@ function bindTelephony() {
       e.preventDefault();
       if (locked()) return;
       if (!saveLinesFromForm()) return;
-      if (!hasApi()) {
-        flash("Сохранено только локально — без сервера телефония не проверится", "warn");
+      if (!isApiOnline()) {
+        flash("Сервер недоступен — сохранение недоступно", "error");
         return;
       }
       try {
         const body = {
-          mode: state.telephony.provider === "mango" ? "mango" : "sip",
+          mode: "sip",
           lines_limit: state.telephony.lines,
           sip_host: state.telephony.sip_host || "",
           sip_login: state.telephony.sip_login || "",
@@ -6694,7 +6735,7 @@ function bindTelephony() {
         flash("Сохранено");
         render();
       } catch (ex) {
-        flash(errorMessage(ex?.code), "error");
+        flash(telephonyErrorText(ex?.code), "error");
       }
     };
   }
@@ -6709,14 +6750,15 @@ function bindTelephony() {
       const sip_login = document.getElementById("sip-login").value.trim();
       const sip_password = document.getElementById("sip-password").value;
       const err = document.getElementById("sip-error");
-      if (!hasApi()) {
-        state.telephony.sipSaved = true;
-        state.telephony.provider = "sip";
-        state.telephony.sip_host = sip_host;
-        state.telephony.sip_login = sip_login;
-        document.getElementById("sip-password").value = "";
-        persistTelephony();
-        flash("Сохранено только локально — без сервера телефония не проверится", "warn");
+      if (!isApiOnline()) {
+        flash("Сервер недоступен — сохранение недоступно", "error");
+        return;
+      }
+      if (!sip_host || !sip_login || (!state.telephony.has_sip_password && !sip_password)) {
+        if (err) {
+          err.hidden = false;
+          err.textContent = ERROR_BY_CODE.sip_invalid;
+        }
         return;
       }
       try {
@@ -6740,9 +6782,9 @@ function bindTelephony() {
       } catch (ex) {
         if (err) {
           err.hidden = false;
-          err.textContent = errorMessage(ex?.code);
+          err.textContent = telephonyErrorText(ex?.code);
         } else {
-          flash(errorMessage(ex?.code), "error");
+          flash(telephonyErrorText(ex?.code), "error");
         }
       }
     };
@@ -6752,48 +6794,16 @@ function bindTelephony() {
 
   const recheck = document.getElementById("sip-recheck");
   if (recheck) recheck.onclick = () => runSipCheck();
-
-  const mango = document.getElementById("mango-form");
-  if (mango) {
-    mango.onsubmit = async (e) => {
-      e.preventDefault();
-      if (locked()) return;
-      if (!saveLinesFromForm()) return;
-      const pwd = document.getElementById("mango-password");
-      if (pwd) pwd.value = "";
-      if (!hasApi()) {
-        flash(errorMessage("api_not_configured"), "error");
-        return;
-      }
-      state.telephony.checking = true;
-      persistTelephony();
-      render();
-      try {
-        const data = await apiFetch("/api/cabinet/telephony", {
-          method: "PUT",
-          session: state.session,
-          body: { mode: "mango", lines_limit: state.telephony.lines || 1 },
-        });
-        applyTelephonyPayload(data);
-        state.ui.telephonyPanel = null;
-        flash("Телефония подключена");
-        render();
-      } catch (ex) {
-        state.telephony.checking = false;
-        state.telephony.status = "error";
-        state.telephony.lastError = ex?.code || "sip_unknown";
-        persistTelephony();
-        flash(errorMessage(ex?.code), "error");
-        render();
-      }
-    };
-  }
 }
 
 async function runSipCheck() {
   if (locked()) return;
-  if (!hasApi()) {
-    flash(errorMessage("api_not_configured"), "error");
+  if (!isApiOnline()) {
+    flash("Сервер недоступен — проверка SIP недоступна", "error");
+    return;
+  }
+  if (!state.telephony.has_sip_password) {
+    flash(ERROR_BY_CODE.telephony_not_ready, "error");
     return;
   }
   state.telephony.checking = true;
@@ -6808,7 +6818,7 @@ async function runSipCheck() {
       ...state.telephony,
       connection_status: result.connection_status,
       error_code: result.error_code,
-      mode: state.telephony.provider || "sip",
+      mode: "sip",
       lines_limit: state.telephony.lines,
       sip_host: state.telephony.sip_host,
       sip_login: state.telephony.sip_login,
@@ -6816,7 +6826,7 @@ async function runSipCheck() {
     });
     if (result.connection_status === "ok") {
       state.ui.telephonyPanel = null;
-      flash("Телефония подключена");
+      flash("SIP подключён");
     } else {
       state.telephony.status = "error";
       state.telephony.lastError = result.error_code || "sip_unknown";
@@ -6828,7 +6838,7 @@ async function runSipCheck() {
     state.telephony.status = "error";
     state.telephony.lastError = ex?.code || "sip_unknown";
     persistTelephony();
-    flash(errorMessage(ex?.code), "error");
+    flash(telephonyErrorText(ex?.code), "error");
     render();
   }
 }
@@ -7879,6 +7889,7 @@ function clearSession() {
   state.impersonate = null;
   state.ui.adminLoaded = false;
   state.ui.telephonyLoaded = false;
+  state.ui.apiReachable = null;
   state.ui.runtimeLoaded = false;
   state.ui.campaignsLoaded = false;
   state.ui.campaignsLoading = false;

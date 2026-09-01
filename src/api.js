@@ -49,13 +49,13 @@ export const ERROR_MESSAGES = {
   provider_unavailable: "Провайдер недоступен. Попробуйте позже",
   check_failed: "Проверка не прошла",
   not_configured: "Сначала сохраните настройки",
-  sip_auth_failed: "Не приняли логин или пароль. Проверьте данные",
-  sip_network: "Нет связи с сервером телефонии. Проверьте адрес и сеть",
+  sip_auth_failed: "Неверный логин или пароль SIP",
+  sip_network: "Не удалось связаться с вашей АТС. Проверьте адрес и доступность",
   sip_rejected: "Сервер телефонии отклонил подключение",
-  sip_unknown: "Не удалось подключить телефонию. Попробуйте ещё раз",
-  sip_unreachable: "Нет связи с сервером телефонии. Проверьте адрес и сеть",
-  sip_invalid: "Не приняли логин или пароль. Проверьте данные",
-  telephony_not_ready: "Сначала подключите телефонию",
+  sip_unknown: "Не удалось проверить SIP. Попробуйте позже",
+  sip_unreachable: "Не удалось связаться с вашей АТС. Проверьте адрес и доступность",
+  sip_invalid: "Заполните адрес SIP, логин и пароль",
+  telephony_not_ready: "Сначала сохраните настройки SIP",
   api_not_configured: "Сначала укажите адрес API",
   request_failed: "Что-то пошло не так. Попробуйте ещё раз",
   server: "Что-то пошло не так. Попробуйте ещё раз",
@@ -81,6 +81,17 @@ export const ERROR_MESSAGES = {
 
 export function hasApi() {
   return Boolean(API_BASE);
+}
+
+/** Best-effort liveness probe — used for fail-closed telephony UI. */
+export async function fetchHealth() {
+  if (!API_BASE) return { ok: false };
+  try {
+    const res = await fetch(`${API_BASE}/health`, { method: "GET" });
+    return { ok: res.ok };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export function errorMessage(code) {
