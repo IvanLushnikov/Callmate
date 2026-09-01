@@ -25,10 +25,21 @@ const checks = [
   ["data-us243-proxy", "US-243"],
   ["Запуск за день", "US-243"],
   ["speedPromiseBannerHtml", "US-243"],
+  ["refreshCampaignAnalytics", "W2-dial"],
+  ["mapAnalyticsSummary", "W2-dial"],
+  ["await refreshCampaignDialState(camp)", "W2-dial"],
+  ["res.dial_state ||", "W2-dial-absent"],
 ];
 
 let failed = 0;
 for (const [needle, tag] of checks) {
+  if (tag === "W2-dial-absent") {
+    if (appJs.includes(needle)) {
+      console.error(`FAIL ${tag}: optimistic dial_state fallback still present (${needle})`);
+      failed += 1;
+    }
+    continue;
+  }
   if (!appJs.includes(needle)) {
     console.error(`FAIL ${tag}: missing ${needle}`);
     failed += 1;
