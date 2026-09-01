@@ -1,4 +1,4 @@
-# Callmate — smoke checklist (кабинет)
+# Scorix — smoke checklist (кабинет)
 
 Узкий чеклист для кампаний / контактов / статусов / тарифов.  
 **Не входит:** admin «Интеграции», FE-189, backend New.
@@ -6,7 +6,7 @@
 ## Автоматически (Playwright)
 
 ```bash
-cd /path/to/Callmate
+cd /path/to/Scorix
 npm install
 npx playwright install chromium
 npm run test:e2e:smoke
@@ -16,7 +16,7 @@ npm run test:e2e:smoke
 
 ## Ручной проход (stub или стенд)
 
-1. **Вход** — форма логина, бренд CallMate, поля логин/пароль.
+1. **Вход** — форма логина, бренд Scorix, поля логин/пароль.
 2. **Кампании** (`#/cabinet/campaigns`) — список или empty-state; бейдж статуса; CTA «Создать кампанию».
 3. **Workspace** — вкладки Обзор / Контакты / Сценарий / …
 4. **Контакты** — upload-зона, таблица, фильтры статусов (Все / В процессе / Завершён / Недозвон / Отмена).

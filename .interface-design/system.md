@@ -1,6 +1,6 @@
-# CallMate — visual contract for agents
+# Scorix — visual contract for agents
 
-**Product:** B2B voice campaigns cabinet + admin (CallMate).
+**Product:** B2B voice campaigns cabinet + admin (Scorix).
 **Stack:** vanilla hash-SPA — `app.js`, `styles.css`, `index.html`.
 **Not for:** marketing landing polish (use `public-seo` + `ux-write-design`).
 
@@ -63,9 +63,9 @@ Dark theme: same token **names** — values in `styles.css` `[data-theme="dark"]
 
 ## Shell (topbar)
 
-- Left: **CallMate** in Syne — hero-level, not eyebrow.
+- Left: **Scorix** in Syne — hero-level, not eyebrow.
 - Right: segmented **Светлая | Тёмная** — not two secondary buttons.
-- Admin: **CallMate · Админка**
+- Admin: **Scorix · Админка**
 - Padding: `--space-3` / `--space-4`
 
 ## Components

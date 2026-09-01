@@ -250,7 +250,7 @@
 ```bash
 cd /Users/ivanlusnikov/New
 PYTHONPATH=. python3 scripts/stage_llm_bench.py --case 21 --model composer-2.5-fast \
-  --report /Users/ivanlusnikov/Callmate/docs/evals/stage-bench-stress-C21-C30.md
+  --report /Users/ivanlusnikov/Scorix/docs/evals/stage-bench-stress-C21-C30.md
 
 # список stress-кейсов
 PYTHONPATH=. python3 scripts/stage_llm_bench.py --list --tier stress

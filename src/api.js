@@ -1,7 +1,7 @@
 /** Thin public API client — no HQ contracts. */
 
 export const API_BASE =
-  (typeof window !== "undefined" && window.CALLMATE_API_BASE) || "";
+  (typeof window !== "undefined" && window.SCORIX_API_BASE) || "";
 
 /** Stable API `code` → UI copy (do not use server message text). */
 export const ERROR_MESSAGES = {

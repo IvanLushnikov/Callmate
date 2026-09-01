@@ -44,7 +44,7 @@
 
 ## Wave 1 — Infra (GPU-сервер)
 
-### VOICE-INF-001 · Репозиторий и docker-compose для callmate-llm-lab
+### VOICE-INF-001 · Репозиторий и docker-compose для scorix-llm-lab
 
 | | |
 |---|---|
@@ -127,7 +127,7 @@
 **Scope:**
 - Секреты **не в git**: `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `YANDEX_API_KEY` (для smoke-тестов с API-сервера)
 - Документ: где хранятся, кто имеет доступ
-- Callmate API env: `VOICE_LAB_VLLM_URL`, `VOICE_LAB_WHISPER_URL`, `VOICE_LAB_GATEWAY_URL`
+- Scorix API env: `VOICE_LAB_VLLM_URL`, `VOICE_LAB_WHISPER_URL`, `VOICE_LAB_GATEWAY_URL`
 
 **DoD:** API-сервер может достучаться до GPU endpoints; ключи провайдеров в Render/env штаба.
 
@@ -292,7 +292,7 @@
 - `synthesizeStream()`, `healthCheck()`
 - `region = "ru"`
 
-**DoD:** синтез фразы «Здравствуйте! Это Callmate.» → audio chunks.
+**DoD:** синтез фразы «Здравствуйте! Это Scorix.» → audio chunks.
 
 ---
 
@@ -498,7 +498,7 @@
 | **Owner** | Backend |
 
 **Scope:**
-- Default text: «Здравствуйте! Это Callmate.»
+- Default text: «Здравствуйте! Это Scorix.»
 - Response: signed URL, TTL 1h
 - Rate limit: 10 req/min per company
 - Errors: `voice_preview_failed`, `provider_down`
@@ -550,7 +550,7 @@
 
 **Scope:**
 - `state.voice` по ТЗ §10.1
-- `loadJson("cm_voice_settings")` / save
+- `loadJson("scx_voice_settings")` / save
 - `voiceLoaded` flag в ui
 
 **DoD:** refresh страницы сохраняет stub-state.
