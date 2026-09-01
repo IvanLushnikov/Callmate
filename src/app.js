@@ -221,12 +221,34 @@ const state = {
   },
   adminIntegrations: {
     loaded: false,
+    tab: "llm",
     items: [],
     catalog: {},
     secret_management: null,
     forms: {},
     feedback: {},
     busy: {},
+    instances: {
+      asr: { items: [], loaded: false },
+      tts: { items: [], loaded: false },
+    },
+    addingInstance: null,
+    instanceForms: {},
+    instanceFeedback: {},
+    instanceBusy: {},
+    voiceProfiles: { items: [], loaded: false },
+    voiceProfileFormOpen: false,
+    voiceProfileForm: {},
+    voiceProfileFeedback: { error: "", ok: "" },
+    voiceProfileBusy: false,
+  },
+  voiceCatalog: {
+    items: [],
+    loaded: false,
+    loading: false,
+    error: "",
+    saveError: "",
+    saveOk: false,
   },
   runtime: null,
 };
@@ -751,7 +773,7 @@ function adminShell(activeTab = "companies") {
   } else if (activeTab === "integrations") {
     body = `<section class="flow-section" id="sec-admin-integrations">
         <h2>Интеграции</h2>
-        <p class="hint">Платформенные LLM / речь. Не путать с SIP компании.</p>
+        <p class="hint">Платформенные модели и речь. Не путать с телефонией компании.</p>
         ${adminIntegrationsPanel()}
       </section>`;
   } else {
@@ -999,10 +1021,11 @@ function adminSettings() {
 }
 
 const INTEGRATION_ERROR_MESSAGES = {
-  auth_failed: "Sber не принял ключ. Нужен авторизационный ключ из кабинета, не Client Secret отдельно",
+  auth_failed: "Сервис не принял ключ. Проверьте ключ и права доступа.",
   check_failed: "Проверка не прошла",
-  provider_unavailable: "Сервис недоступен, попробуйте позже",
-  secret_not_configured: "Ключ ещё не записан — вставьте его и нажмите «Сохранить и включить»",
+  provider_unavailable: "Сервис недоступен. Попробуйте позже.",
+  secret_not_configured: "Ключ ещё не записан — вставьте его и нажмите «Записать ключ».",
+  use_integration_instances: "Обновите интерфейс — для ASR и TTS используйте список подключений.",
 };
 
 function integrationErrorMessage(code) {
@@ -1010,7 +1033,7 @@ function integrationErrorMessage(code) {
   return errorMessage(code);
 }
 
-const ADMIN_INTEGRATION_KINDS = [
+const ADMIN_LLM_KINDS = [
   {
     kind: "llm_campaign",
     title: "LLM для кампаний",
@@ -1023,15 +1046,24 @@ const ADMIN_INTEGRATION_KINDS = [
     hint: "Ответы робота на линии",
     modelLabel: "Модель",
   },
+];
+
+const ADMIN_INTEGRATION_TABS = [
+  { id: "llm", label: "Языковая модель" },
+  { id: "asr", label: "Распознавание речи" },
+  { id: "tts", label: "Озвучка" },
+];
+
+const ADMIN_INSTANCE_KINDS = [
   {
     kind: "asr",
-    title: "Распознавание речи (ASR)",
+    title: "Распознавание речи",
     hint: "Что говорит абонент",
     modelLabel: null,
   },
   {
     kind: "tts",
-    title: "Озвучка (TTS)",
+    title: "Озвучка",
     hint: "Голос робота",
     modelLabel: "Голос",
   },
@@ -1217,8 +1249,337 @@ function _integrationCardHtml(meta, ai) {
 
 function adminIntegrationsPanel() {
   const ai = state.adminIntegrations;
-  const cards = ADMIN_INTEGRATION_KINDS.map((meta) => _integrationCardHtml(meta, ai)).join("");
-  return `<div class="integrations-grid">${cards}</div>`;
+  const tab = ai.tab || "llm";
+  const tabs = ADMIN_INTEGRATION_TABS.map(
+    (t) =>
+      `<button type="button" class="admin-int-tab${tab === t.id ? " is-active" : ""}" data-admin-int-tab="${escapeHtml(t.id)}" role="tab" aria-selected="${tab === t.id}">${escapeHtml(t.label)}</button>`
+  ).join("");
+  let content = "";
+  if (tab === "llm") {
+    content = `<div class="integrations-grid">${ADMIN_LLM_KINDS.map((meta) => _integrationCardHtml(meta, ai)).join("")}</div>`;
+  } else if (tab === "asr") {
+    content = adminIntegrationsInstancesPanel("asr");
+  } else if (tab === "tts") {
+    content = `${adminIntegrationsInstancesPanel("tts")}${adminVoiceProfilesSection()}`;
+  }
+  return `<div class="admin-integrations">
+    <nav class="admin-int-tabs" role="tablist">${tabs}</nav>
+    <div class="admin-int-panel">${content}</div>
+  </div>`;
+}
+
+function _instanceMeta(kind) {
+  return ADMIN_INSTANCE_KINDS.find((m) => m.kind === kind) || { kind, title: kind, hint: "", modelLabel: null };
+}
+
+function _activeInstances(kind) {
+  return (state.adminIntegrations.instances?.[kind]?.items || []).filter(
+    (inst) => inst.active && inst.state === "active"
+  );
+}
+
+function _instanceSliceHtml(title, slice) {
+  if (!slice) return `<p class="hint">Ещё не подключено</p>`;
+  const check = slice.last_check || {};
+  const checkStatus = check.status || "—";
+  const checkError =
+    checkStatus === "failed" && check.error_code
+      ? ` · ${integrationErrorMessage(check.error_code)}`
+      : "";
+  const endpoint = slice.endpoint
+    ? `<p class="hint">Endpoint: ${escapeHtml(slice.endpoint)}</p>`
+    : "";
+  return `<div class="integration-slice-summary">
+    <p><strong>${escapeHtml(title)}</strong></p>
+    <p class="hint">${escapeHtml(slice.brand_label || slice.provider_kind || "—")}${slice.model ? ` · ${escapeHtml(slice.model)}` : ""}</p>
+    ${endpoint}
+    <p class="hint">Ключ: ${slice.has_secret ? "задан" : "нет"} · проверка: ${escapeHtml(checkStatus)}${escapeHtml(checkError)}</p>
+  </div>`;
+}
+
+function _defaultInstanceForm(kind, catalog) {
+  const providers = (catalog && catalog[kind]) || [];
+  const firstAvailable = providers.find((p) => p.available !== false) || providers[0] || {};
+  const models = firstAvailable.models || firstAvailable.voices || [];
+  return {
+    label: "",
+    slug: "",
+    provider_kind: firstAvailable.provider_kind || "",
+    model: models[0] || "",
+    folder_id: "",
+    enabled: true,
+    runtime_mode: "live",
+  };
+}
+
+function _instanceFormFieldsHtml(kind, formKey, form, meta, disabled) {
+  const catalog = state.adminIntegrations.catalog || {};
+  const providers = catalog[kind] || [];
+  const selected = providers.find((p) => p.provider_kind === form.provider_kind) || providers[0];
+  const options = selected?.models?.length ? selected.models : selected?.voices || [];
+  const isCreate = String(formKey).startsWith("new:");
+  const providerOpts = providers
+    .map((p) => {
+      const label = p.brand_label || p.provider_kind;
+      const off = p.available === false ? " disabled" : "";
+      const sel = p.provider_kind === form.provider_kind ? " selected" : "";
+      return `<option value="${escapeHtml(p.provider_kind)}"${sel}${off}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+  const modelField =
+    meta.modelLabel && options.length
+      ? `<label for="inst-${formKey}-model">${escapeHtml(meta.modelLabel)}</label>
+      <select id="inst-${formKey}-model"${disabled}>${options
+          .map((m) => {
+            const sel = m === form.model ? " selected" : "";
+            return `<option value="${escapeHtml(m)}"${sel}>${escapeHtml(m)}</option>`;
+          })
+          .join("")}</select>`
+      : "";
+  const folderField =
+    selected && selected.requires_folder_id
+      ? `<label for="inst-${formKey}-folder">ID каталога Yandex Cloud</label>
+      <input id="inst-${formKey}-folder" type="text" autocomplete="off" value="${escapeHtml(form.folder_id || "")}"${disabled} />`
+      : "";
+  const slugField = isCreate
+    ? `<label for="inst-${formKey}-slug">Slug</label>
+      <input id="inst-${formKey}-slug" type="text" autocomplete="off" pattern="[a-z0-9-]{3,32}" value="${escapeHtml(form.slug || "")}" placeholder="main-tts"${disabled} />
+      <p class="hint">Латиница, цифры и дефис, 3–32 символа. После создания не меняется.</p>`
+    : `<p class="hint instance-slug-hint">Slug: ${escapeHtml(form.slug || "")}</p>`;
+  return `<label for="inst-${formKey}-label">Название подключения</label>
+    <input id="inst-${formKey}-label" type="text" maxlength="64" value="${escapeHtml(form.label || "")}"${disabled} />
+    <p class="hint">Для вас в админке. Клиент его не видит.</p>
+    ${slugField}
+    <label for="inst-${formKey}-provider">Провайдер</label>
+    <select id="inst-${formKey}-provider"${disabled}>${providerOpts || '<option value="">Нет вариантов</option>'}</select>
+    ${modelField}
+    ${folderField}
+    <label for="inst-${formKey}-secret">API-ключ</label>
+    <input id="inst-${formKey}-secret" type="password" autocomplete="new-password" value=""${disabled} />
+    <p class="hint">Ключ сохраняется только при записи. Просмотреть нельзя.</p>`;
+}
+
+function adminInstanceCardHtml(instance, meta, ai) {
+  const kind = meta.kind;
+  const formKey = instance.id;
+  const busy = ai.instanceBusy?.[formKey];
+  const disabled = busy ? " disabled" : "";
+  const fb = ai.instanceFeedback?.[formKey] || {};
+  const editSlice = instance.candidate || instance.active || {};
+  const form =
+    ai.instanceForms?.[formKey] ||
+    _defaultInstanceForm(kind, ai.catalog);
+  if (!ai.instanceForms) ai.instanceForms = {};
+  if (!ai.instanceForms[formKey]) {
+    ai.instanceForms[formKey] = {
+      label: instance.label || form.label,
+      slug: instance.slug || form.slug,
+      provider_kind: editSlice.provider_kind || form.provider_kind,
+      model: editSlice.model || form.model,
+      folder_id: editSlice.folder_id || form.folder_id,
+      enabled: editSlice.enabled != null ? editSlice.enabled : true,
+      runtime_mode: editSlice.runtime_mode || "live",
+    };
+  }
+  const f = ai.instanceForms[formKey];
+  const defaultBadge = instance.is_default
+    ? `<span class="instance-default-badge">По умолчанию</span>`
+    : "";
+  const formId = `inst-${formKey}-form`;
+  return `<article class="panel integration-card" data-instance-id="${escapeHtml(instance.id)}">
+    <div class="integration-card-body">
+      <div class="instance-card-head">
+        <h3>${escapeHtml(instance.label || instance.slug || "Подключение")}</h3>
+        ${defaultBadge}
+      </div>
+      <p class="hint">${escapeHtml(meta.hint)}</p>
+      ${_instanceSliceHtml("Рабочее подключение", instance.active)}
+      ${instance.candidate ? _instanceSliceHtml("Черновик", instance.candidate) : ""}
+      <form class="integration-form" id="${formId}">
+        ${_instanceFormFieldsHtml(kind, formKey, f, meta, disabled)}
+      </form>
+      <div class="error admin-int-error" id="inst-${formKey}-error" ${fb.error ? "" : "hidden"}>${escapeHtml(fb.error || "")}</div>
+      <p class="hint ok-line admin-int-ok" id="inst-${formKey}-ok" ${fb.ok ? "" : "hidden"}>${escapeHtml(fb.ok || "")}</p>
+    </div>
+    <div class="integration-card-actions">
+      <button class="btn secondary" type="button" data-inst-save="${escapeHtml(formKey)}"${disabled}>Сохранить настройки</button>
+      <button class="btn secondary" type="button" data-inst-secret="${escapeHtml(formKey)}"${disabled}>Записать ключ</button>
+      <button class="btn" type="button" data-inst-test="${escapeHtml(formKey)}"${disabled}>${busy ? "Проверяем…" : "Проверить и включить"}</button>
+    </div>
+  </article>`;
+}
+
+function adminInstanceCreateFormHtml(kind, ai) {
+  const meta = _instanceMeta(kind);
+  const formKey = `new:${kind}`;
+  const busy = ai.instanceBusy?.[formKey];
+  const disabled = busy ? " disabled" : "";
+  const fb = ai.instanceFeedback?.[formKey] || {};
+  const form = ai.instanceForms?.[formKey] || _defaultInstanceForm(kind, ai.catalog);
+  if (!ai.instanceForms) ai.instanceForms = {};
+  ai.instanceForms[formKey] = form;
+  const formId = `inst-${formKey}-form`;
+  return `<article class="panel integration-card" data-instance-create="${escapeHtml(kind)}">
+    <div class="integration-card-body">
+      <h3>Новое подключение</h3>
+      <form class="integration-form" id="${formId}">
+        ${_instanceFormFieldsHtml(kind, formKey, form, meta, disabled)}
+      </form>
+      <div class="error admin-int-error" id="inst-${formKey}-error" ${fb.error ? "" : "hidden"}>${escapeHtml(fb.error || "")}</div>
+      <p class="hint ok-line admin-int-ok" id="inst-${formKey}-ok" ${fb.ok ? "" : "hidden"}>${escapeHtml(fb.ok || "")}</p>
+    </div>
+    <div class="integration-card-actions">
+      <button class="btn secondary" type="button" data-inst-cancel="${escapeHtml(kind)}"${disabled}>Отмена</button>
+      <button class="btn" type="button" data-inst-create="${escapeHtml(kind)}"${disabled}>Создать</button>
+    </div>
+  </article>`;
+}
+
+function adminIntegrationsInstancesPanel(kind) {
+  const ai = state.adminIntegrations;
+  const meta = _instanceMeta(kind);
+  const bucket = ai.instances?.[kind] || { items: [] };
+  const items = bucket.items || [];
+  const cards = items.map((inst) => adminInstanceCardHtml(inst, meta, ai)).join("");
+  const addForm = ai.addingInstance === kind ? adminInstanceCreateFormHtml(kind, ai) : "";
+  const addBtn =
+    ai.addingInstance !== kind
+      ? `<button type="button" class="btn" data-add-instance="${escapeHtml(kind)}">Добавить подключение</button>`
+      : "";
+  if (!items.length && ai.addingInstance !== kind) {
+    return `<div class="instances-panel">
+      <p class="hint">Подключений пока нет</p>
+      ${addBtn}
+    </div>`;
+  }
+  return `<div class="instances-panel">
+    ${items.length ? `<div class="integrations-grid">${cards}</div>` : ""}
+    ${addForm}
+    ${addBtn}
+  </div>`;
+}
+
+function adminVoiceProfilesSection() {
+  const vp = state.adminIntegrations.voiceProfiles || { items: [] };
+  const items = vp.items || [];
+  const fb = state.adminIntegrations.voiceProfileFeedback || {};
+  const formOpen = state.adminIntegrations.voiceProfileFormOpen;
+  const form = state.adminIntegrations.voiceProfileForm || {};
+  const busy = state.adminIntegrations.voiceProfileBusy;
+  const asrOpts = _activeInstances("asr")
+    .map(
+      (inst) =>
+        `<option value="${escapeHtml(inst.id)}"${inst.id === form.asr_instance_id ? " selected" : ""}>${escapeHtml(inst.label || inst.slug)}</option>`
+    )
+    .join("");
+  const ttsOpts = _activeInstances("tts")
+    .map(
+      (inst) =>
+        `<option value="${escapeHtml(inst.id)}"${inst.id === form.tts_instance_id ? " selected" : ""}>${escapeHtml(inst.label || inst.slug)}</option>`
+    )
+    .join("");
+  const catalog = state.adminIntegrations.catalog || {};
+  const ttsInst = (state.adminIntegrations.instances?.tts?.items || []).find((i) => i.id === form.tts_instance_id);
+  const ttsProvider = ttsInst?.active?.provider_kind || ttsInst?.candidate?.provider_kind || form.tts_provider_kind;
+  const ttsCatalog = (catalog.tts || []).find((p) => p.provider_kind === ttsProvider);
+  const voiceOpts = (ttsCatalog?.voices || [])
+    .map(
+      (v) =>
+        `<option value="${escapeHtml(v)}"${v === form.tts_voice ? " selected" : ""}>${escapeHtml(v)}</option>`
+    )
+    .join("");
+  const list =
+    items.length === 0 && !formOpen
+      ? `<p class="hint">Ни один голос не включён — клиент не сможет выбрать озвучку в кампании.</p>`
+      : `<div class="voice-profiles-list">${items
+          .map((p) => {
+            const badge =
+              p.state === "published"
+                ? `<span class="voice-profile-badge is-published">Опубликован</span>`
+                : `<span class="voice-profile-badge">Черновик</span>`;
+            const hints = `<span class="hint">${escapeHtml(p.tts_voice || "")}</span>`;
+            const publishBtn =
+              p.state === "draft"
+                ? `<button type="button" class="btn secondary" data-vp-publish="${escapeHtml(p.id)}"${busy ? " disabled" : ""}>Опубликовать</button>`
+                : "";
+            return `<div class="voice-profile-row" data-vp-id="${escapeHtml(p.id)}">
+              <div>
+                <strong>${escapeHtml(p.label)}</strong> ${badge}
+                <p class="hint">${escapeHtml(p.description || "")}</p>
+                ${hints}
+              </div>
+              ${publishBtn}
+            </div>`;
+          })
+          .join("")}</div>`;
+  const createForm = formOpen
+    ? `<form class="panel integration-form" id="voice-profile-create-form">
+        <label for="vp-slug">Slug</label>
+        <input id="vp-slug" type="text" pattern="[a-z0-9-]{3,32}" value="${escapeHtml(form.slug || "")}"${busy ? " disabled" : ""} />
+        <label for="vp-label">Название для клиента</label>
+        <input id="vp-label" type="text" maxlength="48" value="${escapeHtml(form.label || "")}"${busy ? " disabled" : ""} />
+        <label for="vp-description">Описание</label>
+        <input id="vp-description" type="text" maxlength="160" value="${escapeHtml(form.description || "")}"${busy ? " disabled" : ""} />
+        <label for="vp-locale">Locale</label>
+        <input id="vp-locale" type="text" value="${escapeHtml(form.locale || "ru-RU")}"${busy ? " disabled" : ""} />
+        <label for="vp-gender">Gender</label>
+        <select id="vp-gender"${busy ? " disabled" : ""}>
+          <option value="female"${form.gender === "female" ? " selected" : ""}>female</option>
+          <option value="male"${form.gender === "male" ? " selected" : ""}>male</option>
+          <option value="neutral"${form.gender === "neutral" ? " selected" : ""}>neutral</option>
+        </select>
+        <label for="vp-asr">ASR подключение</label>
+        <select id="vp-asr"${busy ? " disabled" : ""}>${asrOpts || '<option value="">Нет активных</option>'}</select>
+        <label for="vp-tts">TTS подключение</label>
+        <select id="vp-tts"${busy ? " disabled" : ""}>${ttsOpts || '<option value="">Нет активных</option>'}</select>
+        <label for="vp-voice">Голос TTS</label>
+        <select id="vp-voice"${busy ? " disabled" : ""}>${voiceOpts || '<option value="">Выберите TTS</option>'}</select>
+        <div class="row-actions">
+          <button type="button" class="btn secondary" id="vp-create-cancel"${busy ? " disabled" : ""}>Отмена</button>
+          <button type="submit" class="btn"${busy ? " disabled" : ""}>Создать голос</button>
+        </div>
+      </form>`
+    : `<button type="button" class="btn secondary" id="vp-create-open"${busy ? " disabled" : ""}>Создать голос</button>`;
+  return `<section class="voice-profiles-section" id="sec-voice-profiles">
+    <h3>Голоса для клиентов</h3>
+    <p class="hint">Отметьте, какие голоса клиент сможет выбрать в кампании. Показываем только название голоса.</p>
+    ${list}
+    ${createForm}
+    <div class="error" id="vp-error" ${fb.error ? "" : "hidden"}>${escapeHtml(fb.error || "")}</div>
+    <p class="hint ok-line" id="vp-ok" ${fb.ok ? "" : "hidden"}>${escapeHtml(fb.ok || "")}</p>
+  </section>`;
+}
+
+async function refreshAdminInstances(kind) {
+  if (!hasApi() || state.role !== "superadmin" || state.impersonate) return;
+  const data = await apiFetch(`/api/admin/integrations/instances?kind=${encodeURIComponent(kind)}`, {
+    session: state.session,
+  });
+  if (!state.adminIntegrations.instances) {
+    state.adminIntegrations.instances = { asr: { items: [], loaded: false }, tts: { items: [], loaded: false } };
+  }
+  state.adminIntegrations.instances[kind] = {
+    items: data?.items || [],
+    loaded: true,
+  };
+}
+
+async function refreshAdminVoiceProfiles() {
+  if (!hasApi() || state.role !== "superadmin" || state.impersonate) return;
+  const data = await apiFetch("/api/admin/voice-profiles", { session: state.session });
+  state.adminIntegrations.voiceProfiles = {
+    items: data?.items || [],
+    loaded: true,
+  };
+}
+
+async function refreshAdminIntegrationsTabData() {
+  const tab = state.adminIntegrations.tab || "llm";
+  if (tab === "asr") {
+    await refreshAdminInstances("asr");
+  } else if (tab === "tts") {
+    await Promise.all([refreshAdminInstances("tts"), refreshAdminVoiceProfiles()]);
+  }
 }
 
 async function refreshAdminIntegrations() {
@@ -1229,7 +1590,7 @@ async function refreshAdminIntegrations() {
   state.adminIntegrations.secret_management = data.secret_management || null;
   state.adminIntegrations.loaded = true;
   if (!state.adminIntegrations.forms) state.adminIntegrations.forms = {};
-  for (const meta of ADMIN_INTEGRATION_KINDS) {
+  for (const meta of ADMIN_LLM_KINDS) {
     const kind = meta.kind;
     const prev = state.adminIntegrations.forms[kind] || {};
     const defaults = _defaultIntegrationForm(kind, state.adminIntegrations.catalog);
@@ -1344,6 +1705,7 @@ function emptyCampaign(partial = {}) {
     uploadWarnings: [],
     analytics: null,
     ever_started: false,
+    voice_profile_id: null,
     ...partial,
   };
 }
@@ -1379,6 +1741,7 @@ function mapCampaignFromApi(c, existing = {}) {
       knowledge_pack: c.knowledge_pack && typeof c.knowledge_pack === "object" ? c.knowledge_pack : {},
       generate_warnings: Array.isArray(c.generate_warnings) ? c.generate_warnings : [],
       analytics: null,
+      voice_profile_id: c.voice_profile_id != null ? c.voice_profile_id : existing.voice_profile_id ?? null,
     });
   }
   return emptyCampaign({
@@ -1406,6 +1769,7 @@ function mapCampaignFromApi(c, existing = {}) {
     generate_warnings: Array.isArray(c.generate_warnings)
       ? c.generate_warnings
       : existing.generate_warnings || [],
+    voice_profile_id: c.voice_profile_id != null ? c.voice_profile_id : existing.voice_profile_id ?? null,
   });
 }
 
@@ -1521,6 +1885,7 @@ async function refreshCampaignDialState(camp) {
   });
   if (data?.dial_state) camp.dial_state = data.dial_state;
   if (data?.ever_started != null) camp.ever_started = Boolean(data.ever_started);
+  if (data?.voice_profile_id !== undefined) camp.voice_profile_id = data.voice_profile_id;
   persistCampaigns();
   return camp;
 }
@@ -2573,6 +2938,123 @@ function campaignWorkspace(camp) {
   </div>`;
 }
 
+function campaignVoicePickerHtml(camp) {
+  const vc = state.voiceCatalog;
+  const voiceLocked = Boolean(camp.ever_started) || locked();
+  const selectedId = camp.voice_profile_id || "";
+  if (vc.loading && !vc.loaded) {
+    return `<div class="voice-picker"><p class="hint">Загружаем…</p></div>`;
+  }
+  if (!vc.loaded) {
+    return `<div class="voice-picker"><p class="hint">Загружаем…</p></div>`;
+  }
+  const allItems = vc.items || [];
+  const available = allItems.filter((i) => i.available !== false);
+  if (available.length === 0 && allItems.length === 0) {
+    return `<div class="voice-picker"><p class="hint">Голоса пока не настроены. Обратитесь в поддержку.</p></div>`;
+  }
+  if (voiceLocked) {
+    const sel =
+      allItems.find((i) => i.voice_profile_id === selectedId) ||
+      available.find((i) => i.voice_profile_id === selectedId);
+    const label = sel?.label || "—";
+    return `<div class="voice-picker voice-picker--locked">
+      <p class="hint">Голос зафиксирован после запуска кампании</p>
+      <p><strong>${escapeHtml(label)}</strong></p>
+      <div class="voice-picker-preview">
+        <button type="button" class="btn secondary" disabled>Прослушать</button>
+        <p class="hint">Прослушать голос пока нельзя — скоро добавим</p>
+      </div>
+    </div>`;
+  }
+  const options = allItems
+    .map((item) => {
+      const dis = item.available === false ? " disabled" : "";
+      const sel = item.voice_profile_id === selectedId ? " selected" : "";
+      const suffix = item.available === false ? " (недоступен)" : "";
+      return `<option value="${escapeHtml(item.voice_profile_id)}"${sel}${dis}>${escapeHtml(item.label)}${suffix}</option>`;
+    })
+    .join("");
+  const oneVoiceHint =
+    available.length === 1
+      ? `<p class="hint">Сейчас доступен один голос — он уже выбран.</p>`
+      : "";
+  const unavailableHint =
+    selectedId && allItems.find((i) => i.voice_profile_id === selectedId && i.available === false)
+      ? `<p class="error">Выбранный голос больше недоступен. Выберите другой.</p>`
+      : "";
+  const savedOk = vc.saveOk ? `<p class="hint ok-line">Голос сохранён</p>` : "";
+  const saveErr = vc.saveError ? `<p class="error">${escapeHtml(vc.saveError)}</p>` : "";
+  const catalogErr = vc.error ? `<p class="error">${escapeHtml(vc.error)}</p>` : "";
+  return `<div class="voice-picker" id="sec-voice-picker-inner">
+    <div class="preview-field">
+      <label for="campaign-voice-select">Голос</label>
+      <select id="campaign-voice-select">
+        <option value="">Выберите голос</option>
+        ${options}
+      </select>
+      ${oneVoiceHint}
+      ${unavailableHint}
+    </div>
+    <div class="voice-picker-preview">
+      <button type="button" class="btn secondary" id="voice-preview-btn" disabled>Прослушать</button>
+      <p class="hint">Прослушать голос пока нельзя — скоро добавим</p>
+    </div>
+    ${savedOk}
+    ${saveErr}
+    ${catalogErr}
+  </div>`;
+}
+
+async function refreshVoiceCatalog() {
+  if (!hasApi()) return;
+  state.voiceCatalog.loading = true;
+  state.voiceCatalog.error = "";
+  try {
+    const data = await apiFetch("/api/cabinet/voice-catalog", { session: state.session });
+    state.voiceCatalog.items = data?.items || [];
+    state.voiceCatalog.loaded = true;
+  } catch (e) {
+    state.voiceCatalog.error = errorMessage(e?.code) || "Не удалось связаться с сервером";
+  } finally {
+    state.voiceCatalog.loading = false;
+  }
+}
+
+async function saveCampaignVoiceProfile(camp, voiceProfileId) {
+  if (!hasApi() || !camp?.id) return;
+  if (camp.ever_started) return;
+  state.voiceCatalog.saveError = "";
+  state.voiceCatalog.saveOk = false;
+  try {
+    const data = await apiFetch(
+      `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/voice-profile`,
+      {
+        method: "PUT",
+        session: state.session,
+        body: { voice_profile_id: voiceProfileId || null },
+      }
+    );
+    camp.voice_profile_id = data?.voice_profile_id ?? voiceProfileId ?? null;
+    state.voiceCatalog.saveOk = true;
+    persistCampaigns();
+    await refreshGates(camp).catch(() => {});
+  } catch (e) {
+    state.voiceCatalog.saveError =
+      e?.code === "campaign_running_locked"
+        ? "После запуска голос изменить нельзя"
+        : errorMessage(e?.code) || "Не удалось сохранить. Попробуйте ещё раз.";
+  }
+}
+
+async function ensureAutoVoiceSelection(camp) {
+  if (!hasApi() || !camp || camp.ever_started || camp.voice_profile_id) return;
+  const available = (state.voiceCatalog.items || []).filter((i) => i.available !== false);
+  if (available.length === 1) {
+    await saveCampaignVoiceProfile(camp, available[0].voice_profile_id);
+  }
+}
+
 function blockScenarioFlow(camp, weak, started) {
   const preview = previewForDisplay(camp);
   const dis = started || locked() || state.ui.generatePending ? "disabled" : "";
@@ -2646,6 +3128,10 @@ function blockScenarioFlow(camp, weak, started) {
             </div>
           </div>`;
 
+  const voicePickerBlock = hasApi()
+    ? campaignVoicePickerHtml(camp)
+    : "";
+
   const stagesBlock = `${
     stages.length
       ? `<div class="stages-compact">${stages
@@ -2706,6 +3192,7 @@ function blockScenarioFlow(camp, weak, started) {
       <div class="form-zones">
         ${formZone("Цель и сведения", "", contextBlock, { id: "sec-context" })}
         ${hasServerPreview || pending ? formZone("Как звучит робот", "", voiceBlock, { id: "sec-voice" }) : ""}
+        ${hasServerPreview || pending ? formZone("Голос робота", "Как робот будет звучать на линии. Выберите один вариант.", voicePickerBlock, { id: "sec-voice-picker" }) : ""}
         ${formZone("Сценарий и этапы", "Название столбца в файле должно совпадать с полем в сценарии", stagesBlock, { id: "sec-scenario" })}
       </div>
 
@@ -3397,6 +3884,16 @@ function gateReasonText(err) {
     if (Array.isArray(cols) && cols.length) return `Нет столбца «${cols[0]}» в файле`;
     return "Нет столбца в файле";
   }
+  if (
+    code === "voice_not_configured" ||
+    code === "voice_required" ||
+    code === "voice_not_available"
+  ) {
+    return errorMessage(code);
+  }
+  if (code === "voice_profile_not_found" || code === "voice_profile_unavailable") {
+    return errorMessage(code);
+  }
   return errorMessage(code) || String(code || "Пока нельзя начать");
 }
 
@@ -3857,6 +4354,21 @@ function render() {
           if (cabinet.page === "tariffs") flash(errorMessage(e?.code) || "Не удалось загрузить тарифы", "error");
         });
     }
+    if (
+      hasApi() &&
+      cabinet.page === "workspace" &&
+      (state.ui.workspaceTab === "scenario" || !state.ui.workspaceTab) &&
+      !state.voiceCatalog.loaded &&
+      !state.voiceCatalog.loading
+    ) {
+      void refreshVoiceCatalog()
+        .then(async () => {
+          const camp = workspaceCampaign();
+          if (camp) await ensureAutoVoiceSelection(camp);
+          render();
+        })
+        .catch(() => render());
+    }
     return;
   }
   if (path === "/admin" || path === "/admin/settings" || path === "/admin/integrations") {
@@ -3871,7 +4383,8 @@ function render() {
     clearFlashSoon();
     if (hasApi() && path === "/admin/integrations") {
       void refreshAdminIntegrations()
-        .then(() => {
+        .then(async () => {
+          await refreshAdminIntegrationsTabData().catch(() => {});
           app.innerHTML = adminShell("integrations");
           bindShell();
         })
@@ -4902,7 +5415,7 @@ function bindAdminIntegrations() {
     }
   }
 
-  for (const meta of ADMIN_INTEGRATION_KINDS) {
+  for (const meta of ADMIN_LLM_KINDS) {
     const kind = meta.kind;
     const providerSel = document.getElementById(`admin-int-${kind}-provider`);
     const modelSel = document.getElementById(`admin-int-${kind}-model`);
@@ -4932,6 +5445,355 @@ function bindAdminIntegrations() {
       };
     }
   }
+
+  document.querySelectorAll("[data-admin-int-tab]").forEach((btn) => {
+    btn.onclick = async () => {
+      const tab = btn.getAttribute("data-admin-int-tab");
+      if (!tab || tab === state.adminIntegrations.tab) return;
+      state.adminIntegrations.tab = tab;
+      state.adminIntegrations.addingInstance = null;
+      render();
+      try {
+        await refreshAdminIntegrationsTabData();
+        render();
+      } catch (e) {
+        flash(errorMessage(e?.code), "error");
+      }
+    };
+  });
+
+  function instanceByKey(formKey) {
+    if (String(formKey).startsWith("new:")) return null;
+    for (const kind of ["asr", "tts"]) {
+      const found = (state.adminIntegrations.instances?.[kind]?.items || []).find(
+        (i) => String(i.id) === String(formKey)
+      );
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function setInstanceFeedback(formKey, errText, okText) {
+    if (!state.adminIntegrations.instanceFeedback) state.adminIntegrations.instanceFeedback = {};
+    state.adminIntegrations.instanceFeedback[formKey] = { error: errText || "", ok: okText || "" };
+  }
+
+  function readInstanceForm(formKey, kind) {
+    const label = document.getElementById(`inst-${formKey}-label`)?.value.trim() || "";
+    const slug = document.getElementById(`inst-${formKey}-slug`)?.value.trim() || "";
+    const provider_kind = document.getElementById(`inst-${formKey}-provider`)?.value || "";
+    const modelEl = document.getElementById(`inst-${formKey}-model`);
+    const folderEl = document.getElementById(`inst-${formKey}-folder`);
+    const body = {
+      label,
+      provider_kind,
+      enabled: true,
+      runtime_mode: "live",
+    };
+    if (modelEl) body.model = modelEl.value;
+    if (folderEl && folderEl.value.trim()) body.folder_id = folderEl.value.trim();
+    if (String(formKey).startsWith("new:")) {
+      body.kind = kind;
+      body.slug = slug;
+    }
+    return { body, label, slug };
+  }
+
+  async function saveInstanceMetadata(formKey, kind) {
+    const instance = instanceByKey(formKey);
+    const { body, label } = readInstanceForm(formKey, kind);
+    if (!label) throw Object.assign(new Error("invalid_field"), { code: "invalid_field" });
+    if (instance) {
+      body.expected_generation = instance.generation;
+      if (instance.candidate) body.expected_candidate_revision_no = instance.candidate.revision_no;
+      await apiFetch(`/api/admin/integrations/instances/${encodeURIComponent(instance.id)}`, {
+        method: "PUT",
+        session: state.session,
+        body,
+      });
+      await refreshAdminInstances(kind);
+    }
+  }
+
+  async function writeInstanceSecret(formKey, kind) {
+    const instance = instanceByKey(formKey);
+    if (!instance) return;
+    const secret = document.getElementById(`inst-${formKey}-secret`)?.value.trim();
+    if (!secret) throw Object.assign(new Error("invalid_field"), { code: "invalid_field" });
+    const body = {
+      secret,
+      expected_generation: instance.generation,
+    };
+    if (instance.candidate) body.expected_candidate_revision_no = instance.candidate.revision_no;
+    await apiFetch(`/api/admin/integrations/instances/${encodeURIComponent(instance.id)}/secret`, {
+      method: "POST",
+      session: state.session,
+      body,
+    });
+    const secretInput = document.getElementById(`inst-${formKey}-secret`);
+    if (secretInput) secretInput.value = "";
+    await refreshAdminInstances(kind);
+  }
+
+  async function testInstance(formKey, kind) {
+    const instance = instanceByKey(formKey);
+    if (!instance) return;
+    const rev = instance.candidate || instance.active;
+    if (!rev) throw Object.assign(new Error("not_configured"), { code: "not_configured" });
+    const result = await apiFetch(
+      `/api/admin/integrations/instances/${encodeURIComponent(instance.id)}/test`,
+      {
+        method: "POST",
+        session: state.session,
+        body: { revision_no: rev.revision_no, activate_on_success: true },
+      }
+    );
+    await refreshAdminInstances(kind);
+    if (result.status !== "passed") {
+      throw Object.assign(new Error(result.error_code || "check_failed"), {
+        code: result.error_code || "check_failed",
+      });
+    }
+  }
+
+  document.querySelectorAll("[data-add-instance]").forEach((btn) => {
+    btn.onclick = () => {
+      state.adminIntegrations.addingInstance = btn.getAttribute("data-add-instance");
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-inst-cancel]").forEach((btn) => {
+    btn.onclick = () => {
+      state.adminIntegrations.addingInstance = null;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-inst-create]").forEach((btn) => {
+    btn.onclick = async () => {
+      const kind = btn.getAttribute("data-inst-create");
+      const formKey = `new:${kind}`;
+      if (!hasApi()) return;
+      state.adminIntegrations.instanceBusy[formKey] = true;
+      setInstanceFeedback(formKey, "", "");
+      try {
+        const { body, label, slug } = readInstanceForm(formKey, kind);
+        if (!label || !slug || !body.provider_kind) {
+          setInstanceFeedback(formKey, "Проверьте поля", "");
+          return;
+        }
+        await apiFetch("/api/admin/integrations/instances", {
+          method: "POST",
+          session: state.session,
+          body,
+        });
+        state.adminIntegrations.addingInstance = null;
+        delete state.adminIntegrations.instanceForms[formKey];
+        await refreshAdminInstances(kind);
+        setInstanceFeedback(formKey, "", "Подключение создано");
+        render();
+      } catch (ex) {
+        setInstanceFeedback(
+          formKey,
+          ex?.code === "revision_conflict"
+            ? "Данные устарели — обновите страницу и повторите"
+            : integrationErrorMessage(ex?.code),
+          ""
+        );
+        render();
+      } finally {
+        state.adminIntegrations.instanceBusy[formKey] = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-inst-save]").forEach((btn) => {
+    btn.onclick = async () => {
+      const formKey = btn.getAttribute("data-inst-save");
+      const instance = instanceByKey(formKey);
+      if (!instance) return;
+      state.adminIntegrations.instanceBusy[formKey] = true;
+      setInstanceFeedback(formKey, "", "");
+      try {
+        await saveInstanceMetadata(formKey, instance.kind);
+        setInstanceFeedback(formKey, "", "Настройки сохранены");
+        render();
+      } catch (ex) {
+        setInstanceFeedback(
+          formKey,
+          ex?.code === "revision_conflict"
+            ? "Данные устарели — обновите страницу и повторите"
+            : integrationErrorMessage(ex?.code),
+          ""
+        );
+        render();
+      } finally {
+        state.adminIntegrations.instanceBusy[formKey] = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-inst-secret]").forEach((btn) => {
+    btn.onclick = async () => {
+      const formKey = btn.getAttribute("data-inst-secret");
+      const instance = instanceByKey(formKey);
+      if (!instance) return;
+      state.adminIntegrations.instanceBusy[formKey] = true;
+      setInstanceFeedback(formKey, "", "");
+      try {
+        await writeInstanceSecret(formKey, instance.kind);
+        setInstanceFeedback(formKey, "", "Ключ записан");
+        render();
+      } catch (ex) {
+        setInstanceFeedback(
+          formKey,
+          ex?.code === "revision_conflict"
+            ? "Данные устарели — обновите страницу и повторите"
+            : integrationErrorMessage(ex?.code),
+          ""
+        );
+        render();
+      } finally {
+        state.adminIntegrations.instanceBusy[formKey] = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-inst-test]").forEach((btn) => {
+    btn.onclick = async () => {
+      const formKey = btn.getAttribute("data-inst-test");
+      const instance = instanceByKey(formKey);
+      if (!instance) return;
+      state.adminIntegrations.instanceBusy[formKey] = true;
+      setInstanceFeedback(formKey, "", "Проверяем…");
+      render();
+      try {
+        await testInstance(formKey, instance.kind);
+        setInstanceFeedback(formKey, "", "Подключение проверено, конфигурация активна");
+        render();
+      } catch (ex) {
+        setInstanceFeedback(
+          formKey,
+          ex?.code === "revision_conflict"
+            ? "Данные устарели — обновите страницу и повторите"
+            : integrationErrorMessage(ex?.code) || "Проверка не прошла. Рабочее подключение не изменилось.",
+          ""
+        );
+        render();
+      } finally {
+        state.adminIntegrations.instanceBusy[formKey] = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[id^='inst-'][id$='-provider']").forEach((sel) => {
+    const m = sel.id.match(/^inst-(.+)-provider$/);
+    if (!m) return;
+    sel.onchange = () => {
+      const formKey = m[1];
+      if (!state.adminIntegrations.instanceForms[formKey]) state.adminIntegrations.instanceForms[formKey] = {};
+      state.adminIntegrations.instanceForms[formKey].provider_kind = sel.value;
+      const kind = String(formKey).startsWith("new:") ? formKey.split(":")[1] : instanceByKey(formKey)?.kind;
+      const providers = (state.adminIntegrations.catalog && state.adminIntegrations.catalog[kind]) || [];
+      const match = providers.find((p) => p.provider_kind === sel.value);
+      const options = (match && match.models) || (match && match.voices) || [];
+      state.adminIntegrations.instanceForms[formKey].model = options[0] || "";
+      render();
+    };
+  });
+
+  const vpOpen = document.getElementById("vp-create-open");
+  if (vpOpen) {
+    vpOpen.onclick = () => {
+      state.adminIntegrations.voiceProfileFormOpen = true;
+      state.adminIntegrations.voiceProfileForm = state.adminIntegrations.voiceProfileForm || {};
+      render();
+    };
+  }
+  const vpCancel = document.getElementById("vp-create-cancel");
+  if (vpCancel) {
+    vpCancel.onclick = () => {
+      state.adminIntegrations.voiceProfileFormOpen = false;
+      render();
+    };
+  }
+  const vpForm = document.getElementById("voice-profile-create-form");
+  if (vpForm) {
+    vpForm.onsubmit = async (e) => {
+      e.preventDefault();
+      state.adminIntegrations.voiceProfileBusy = true;
+      state.adminIntegrations.voiceProfileFeedback = { error: "", ok: "" };
+      try {
+        const body = {
+          slug: document.getElementById("vp-slug")?.value.trim(),
+          label: document.getElementById("vp-label")?.value.trim(),
+          description: document.getElementById("vp-description")?.value.trim() || undefined,
+          locale: document.getElementById("vp-locale")?.value.trim() || undefined,
+          gender: document.getElementById("vp-gender")?.value || undefined,
+          asr_instance_id: document.getElementById("vp-asr")?.value,
+          tts_instance_id: document.getElementById("vp-tts")?.value,
+          tts_voice: document.getElementById("vp-voice")?.value,
+        };
+        await apiFetch("/api/admin/voice-profiles", {
+          method: "POST",
+          session: state.session,
+          body,
+        });
+        state.adminIntegrations.voiceProfileFormOpen = false;
+        state.adminIntegrations.voiceProfileForm = {};
+        await refreshAdminVoiceProfiles();
+        state.adminIntegrations.voiceProfileFeedback = { error: "", ok: "Голос создан" };
+        render();
+      } catch (ex) {
+        state.adminIntegrations.voiceProfileFeedback = {
+          error: integrationErrorMessage(ex?.code),
+          ok: "",
+        };
+        render();
+      } finally {
+        state.adminIntegrations.voiceProfileBusy = false;
+      }
+    };
+  }
+  const vpTts = document.getElementById("vp-tts");
+  if (vpTts) {
+    vpTts.onchange = () => {
+      if (!state.adminIntegrations.voiceProfileForm) state.adminIntegrations.voiceProfileForm = {};
+      state.adminIntegrations.voiceProfileForm.tts_instance_id = vpTts.value;
+      const inst = (state.adminIntegrations.instances?.tts?.items || []).find((i) => i.id === vpTts.value);
+      state.adminIntegrations.voiceProfileForm.tts_provider_kind =
+        inst?.active?.provider_kind || inst?.candidate?.provider_kind || "";
+      render();
+    };
+  }
+  document.querySelectorAll("[data-vp-publish]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute("data-vp-publish");
+      const profile = (state.adminIntegrations.voiceProfiles?.items || []).find((p) => p.id === id);
+      if (!profile) return;
+      state.adminIntegrations.voiceProfileBusy = true;
+      state.adminIntegrations.voiceProfileFeedback = { error: "", ok: "" };
+      try {
+        await apiFetch(`/api/admin/voice-profiles/${encodeURIComponent(id)}/publish`, {
+          method: "PUT",
+          session: state.session,
+          body: { expected_version: profile.version },
+        });
+        await refreshAdminVoiceProfiles();
+        state.adminIntegrations.voiceProfileFeedback = { error: "", ok: "Голос опубликован" };
+        render();
+      } catch (ex) {
+        state.adminIntegrations.voiceProfileFeedback = {
+          error: integrationErrorMessage(ex?.code),
+          ok: "",
+        };
+        render();
+      } finally {
+        state.adminIntegrations.voiceProfileBusy = false;
+      }
+    };
+  });
 }
 
 function hasAssembledScenario(camp) {
@@ -5378,6 +6240,19 @@ function bindCampaignForms() {
   if (launchReasonsClose) launchReasonsClose.onclick = closeLaunchReasons;
   const launchReasonsBackdrop = document.getElementById("launch-reasons-backdrop");
   if (launchReasonsBackdrop) launchReasonsBackdrop.onclick = closeLaunchReasons;
+
+  const voiceSelect = document.getElementById("campaign-voice-select");
+  if (voiceSelect) {
+    voiceSelect.onchange = async () => {
+      const camp = workspaceCampaign();
+      if (!camp || camp.ever_started || locked()) return;
+      state.voiceCatalog.saveOk = false;
+      state.voiceCatalog.saveError = "";
+      const val = voiceSelect.value;
+      await saveCampaignVoiceProfile(camp, val || null);
+      render();
+    };
+  }
 }
 
 function workspaceCampaign() {

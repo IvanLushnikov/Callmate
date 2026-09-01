@@ -4731,3 +4731,100 @@ label {
 .integration-card select option:disabled {
   color: var(--muted, #98a2b3);
 }
+
+.admin-int-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.admin-int-tab {
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius, 8px);
+  background: var(--surface, #fff);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.admin-int-tab.is-active {
+  border-color: var(--accent, #2563eb);
+  background: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent);
+}
+
+.admin-int-tab:focus-visible {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: 2px;
+}
+
+.instances-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.instance-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.instance-slug-hint {
+  font-size: 0.875rem;
+}
+
+.instance-default-badge {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: var(--surface-2, #f2f4f7);
+}
+
+.voice-profiles-section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border, #e4e7ec);
+}
+
+.voice-profile-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border, #e4e7ec);
+}
+
+.voice-profile-badge {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: var(--surface-2, #f2f4f7);
+}
+
+.voice-profile-badge.is-published {
+  background: color-mix(in srgb, var(--accent, #2563eb) 12%, transparent);
+}
+
+.voice-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.voice-picker-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.voice-picker--locked .voice-picker-preview {
+  opacity: 0.85;
+}

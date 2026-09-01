@@ -68,6 +68,15 @@ export const ERROR_MESSAGES = {
   pack_gaps_critical:
     "Не хватает данных для этого типа звонка. Дополните контекст и сохраните ещё раз.",
   read_only_after_start: "После запуска менять нельзя. Для правок — новая кампания.",
+  voice_not_configured: "Выберите голос робота",
+  voice_profile_not_found: "Выбранный голос больше недоступен. Выберите другой.",
+  voice_profile_unavailable: "Выбранный голос больше недоступен. Выберите другой.",
+  voice_required: "Выберите голос робота",
+  voice_not_available: "Выбранный голос больше недоступен. Выберите другой.",
+  campaign_running_locked: "После запуска голос изменить нельзя",
+  vendor_name_forbidden: "В названии нельзя указывать имя провайдера",
+  use_integration_instances: "Обновите интерфейс — для ASR и TTS используйте список подключений",
+  invalid_kind: "Неверный тип подключения",
 };
 
 export function hasApi() {
