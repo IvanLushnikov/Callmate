@@ -29,6 +29,12 @@ const checks = [
   ["mapAnalyticsSummary", "W2-dial"],
   ["await refreshCampaignDialState(camp)", "W2-dial"],
   ["res.dial_state ||", "W2-dial-absent"],
+  ["dialModeBannerHtml", "W3-stub-live"],
+  ["runtimeModeBadgeHtml", "W3-stub-live"],
+  ["refreshRuntime", "W3-stub-live"],
+  ["/api/cabinet/runtime", "W3-stub-live"],
+  ["data-testid=\"dial-mode-banner\"", "W3-stub-live"],
+  ["Лабораторный режим", "W3-stub-live"],
 ];
 
 let failed = 0;

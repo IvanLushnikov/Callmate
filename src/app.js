@@ -181,6 +181,7 @@ const state = {
     contactsUploading: false,
     uploadCancelRequested: false,
     telephonyLoaded: false,
+    runtimeLoaded: false,
     cabinetMeLoaded: false,
     campaignsLoaded: false,
     gateErrors: [],
@@ -226,6 +227,7 @@ const state = {
     feedback: {},
     busy: {},
   },
+  runtime: null,
 };
 
 function persistCampaigns() {
@@ -650,6 +652,49 @@ function impersonateBanner() {
     <strong>Вы в кабинете «${escapeHtml(name)}» как суперадмин</strong>
     <button class="btn secondary" type="button" id="exit-impersonate">Выйти в админку</button>
   </div>`;
+}
+
+/** Server/runtime dial mode — stub vs live_sip (wave 3 honesty). */
+function runtimeDialMode() {
+  if (!hasApi()) return "offline";
+  return state.runtime?.dial_mode || state.runtime?.adapters?.telephony || "unknown";
+}
+
+function runtimeModeBadgeHtml() {
+  const mode = runtimeDialMode();
+  if (mode === "offline") {
+    return `<span class="runtime-mode-badge runtime-mode-badge--offline" data-testid="runtime-mode-badge" title="Нет подключения к серверу">Без сервера</span>`;
+  }
+  if (mode === "live_sip") {
+    return `<span class="runtime-mode-badge runtime-mode-badge--live" data-testid="runtime-mode-badge" title="Worker набирает через SIP">Живой обзвон</span>`;
+  }
+  if (mode === "stub") {
+    return `<span class="runtime-mode-badge runtime-mode-badge--stub" data-testid="runtime-mode-badge" title="Звонки имитируются, реального дозвона нет">Учебный обзвон</span>`;
+  }
+  return "";
+}
+
+function dialModeBannerHtml() {
+  const mode = runtimeDialMode();
+  if (mode === "offline") {
+    return `<div class="banner banner-warn dial-mode-banner" data-testid="dial-mode-banner" role="status">
+      <strong>Кабинет без сервера</strong>
+      <p class="hint">Обзвон не запустится — данные хранятся только в этом браузере.</p>
+    </div>`;
+  }
+  if (mode === "stub") {
+    return `<div class="banner banner-warn dial-mode-banner" data-testid="dial-mode-banner" role="status">
+      <strong>Лабораторный режим</strong>
+      <p class="hint">Звонки имитируются — реального дозвона нет. Статусы и транскрипты учебные.</p>
+    </div>`;
+  }
+  if (mode === "live_sip") {
+    return `<div class="banner banner-info dial-mode-banner" data-testid="dial-mode-banner" role="status">
+      <strong>Живые звонки</strong>
+      <p class="hint">Worker набирает через SIP. Результаты — с сервера.</p>
+    </div>`;
+  }
+  return "";
 }
 
 function appTabsHtml(activeTab, tabs = CABINET_TABS) {
@@ -2369,6 +2414,7 @@ function workspaceOverviewTab(camp, weak, started) {
   );
 
   return `<div class="workspace-tab-panel" data-tab="overview">
+    ${dialModeBannerHtml()}
     ${speedPromiseBannerHtml()}
     ${launchChecklistHtml(camp)}
     <div class="onboard-steps">${step1Simple}${step2}${step3}${step4}</div>
@@ -2406,7 +2452,7 @@ function campaignWorkspace(camp) {
   else if (tab === "contacts") tabContent = `<div class="workspace-tab-panel" data-tab="contacts">${blockNumbers(camp)}</div>`;
   else if (tab === "scenario") tabContent = `<div class="workspace-tab-panel" data-tab="scenario">${blockScenarioFlow(camp, weak, started)}</div>`;
   else if (tab === "calls")
-    tabContent = `<div class="workspace-tab-panel" data-tab="calls">${blockCallProgress(camp)}${blockCallQuality(camp)}</div>`;
+    tabContent = `<div class="workspace-tab-panel" data-tab="calls">${dialModeBannerHtml()}${blockCallProgress(camp)}${blockCallQuality(camp)}</div>`;
   else if (tab === "results")
     tabContent = `<div class="workspace-tab-panel" data-tab="results">${hasCampaignCalls(camp) ? blockBusinessOutcomes(camp) + blockCampaignAnalytics(camp) : `<div class="results-placeholder panel"><p class="hint results-placeholder-title">После первого звонка здесь появятся итоги и метрики</p>${blockBusinessOutcomes(camp)}</div>`}</div>`;
   else if (tab === "settings")
@@ -2442,6 +2488,7 @@ function campaignWorkspace(camp) {
           </div>
           <div class="workspace-toolbar">
             <span class="workspace-readiness" title="Готовность к запуску">${completed} из ${total}</span>
+            ${runtimeModeBadgeHtml()}
             ${balanceChipHtml({ className: "balance-chip--workspace" })}
             <div class="workspace-summary-actions">${dialActionsHtml(camp)}</div>
           </div>
@@ -2944,6 +2991,7 @@ function sectionTelephony() {
       )}
     </div>
     ${telWarn && !t.checking ? `<div class="banner banner-danger desk-banner"><strong>Не удалось подключить телефонию</strong><p class="hint">${escapeHtml(statusHint)}</p></div>` : ""}
+    ${hasApi() ? dialModeBannerHtml() : `<div class="banner banner-warn desk-banner" data-testid="dial-mode-banner"><strong>Без сервера</strong><p class="hint">Телефония сохранится только в браузере — проверка связи недоступна.</p></div>`}
     ${statusActions}
     ${t.checking ? "" : linesField(linesVal)}
     ${expand ? `<div class="tel-form-expand">${expand}</div>` : ""}`;
@@ -3730,6 +3778,14 @@ function render() {
       void refreshTelephony()
         .then(() => render())
         .catch((e) => flash(errorMessage(e?.code), "error"));
+    }
+    if (hasApi() && !state.ui.runtimeLoaded && state.session && canCabinet) {
+      state.ui.runtimeLoaded = true;
+      void refreshRuntime()
+        .then(() => render())
+        .catch(() => {
+          state.ui.runtimeLoaded = false;
+        });
     }
     if (
       hasApi() &&
@@ -5338,6 +5394,16 @@ async function refreshTelephony() {
   applyTelephonyPayload(data);
 }
 
+async function refreshRuntime() {
+  if (!hasApi()) {
+    state.runtime = null;
+    return null;
+  }
+  const data = await apiFetch("/api/cabinet/runtime", { session: state.session });
+  state.runtime = data;
+  return data;
+}
+
 function bindTelephony() {
   document.querySelectorAll("[data-open-tel]").forEach((btn) => {
     btn.onclick = () => {
@@ -5359,7 +5425,7 @@ function bindTelephony() {
       if (locked()) return;
       if (!saveLinesFromForm()) return;
       if (!hasApi()) {
-        flash("Сохранено");
+        flash("Сохранено только локально — без сервера телефония не проверится", "warn");
         return;
       }
       try {
@@ -5400,7 +5466,7 @@ function bindTelephony() {
         state.telephony.sip_login = sip_login;
         document.getElementById("sip-password").value = "";
         persistTelephony();
-        flash("Сохранено");
+        flash("Сохранено только локально — без сервера телефония не проверится", "warn");
         return;
       }
       try {
@@ -6554,8 +6620,10 @@ function clearSession() {
   state.impersonate = null;
   state.ui.adminLoaded = false;
   state.ui.telephonyLoaded = false;
+  state.ui.runtimeLoaded = false;
   state.ui.campaignsLoaded = false;
   state.ui.cabinetMeLoaded = false;
+  state.runtime = null;
   writeSessionToken("");
   try {
     sessionStorage.removeItem("scx_impersonate");
