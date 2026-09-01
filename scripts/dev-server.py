@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static UI + /api proxy for local dev (avoids CORS to scorix-api.onrender.com)."""
+"""Static UI + /api proxy for local dev (avoids CORS to callmate-api.onrender.com)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-API_UPSTREAM = "https://scorix-api.onrender.com"
+API_UPSTREAM = "https://callmate-api.onrender.com"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
 
 HOP_BY_HOP = {
