@@ -4803,6 +4803,10 @@ label {
   color: var(--muted, #98a2b3);
 }
 
+.integration-status--stub {
+  color: var(--muted, #667085);
+}
+
 .integration-card--focused {
   outline: 2px solid var(--accent, #2563eb);
   outline-offset: var(--space-1);

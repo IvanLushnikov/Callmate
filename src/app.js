@@ -1085,6 +1085,54 @@ function _defaultIntegrationForm(kind, catalog) {
   };
 }
 
+function _integrationCheckLabel(slice) {
+  const check = slice.last_check || {};
+  const status = check.status || "not_tested";
+  if (status === "passed") {
+    if (slice.runtime_mode === "live" && slice.has_secret) {
+      return "пройдена";
+    }
+    return "тест (без ключа)";
+  }
+  if (status === "not_tested") return "не проверялась";
+  if (status === "failed") return "не пройдена";
+  return status;
+}
+
+function _integrationSliceConnectionMeta(slice) {
+  if (!slice) {
+    return { label: "Не настроено", tone: "empty" };
+  }
+  const check = slice.last_check || {};
+  const checkStatus = check.status || "not_tested";
+
+  if (!slice.enabled && slice.runtime_mode === "stub") {
+    return { label: "Отключено", tone: "disabled" };
+  }
+
+  if (slice.state === "draft" || slice.state === "verified" || slice.state === "failed") {
+    return { label: "Черновик", tone: "candidate" };
+  }
+
+  if (slice.state === "active") {
+    if (slice.has_secret && slice.runtime_mode === "live" && checkStatus === "passed") {
+      return { label: "Работает", tone: "active" };
+    }
+    if (slice.runtime_mode === "stub" || !slice.has_secret) {
+      if (checkStatus === "passed") {
+        return { label: "Тест (без ключа)", tone: "stub" };
+      }
+      return { label: "Не настроено", tone: "empty" };
+    }
+    if (checkStatus === "failed") {
+      return { label: "Ошибка проверки", tone: "disabled" };
+    }
+    return { label: "Не настроено", tone: "empty" };
+  }
+
+  return { label: "Не настроено", tone: "empty" };
+}
+
 function _integrationSliceHtml(title, slice) {
   if (!slice) {
     return `<p class="hint">Ещё не подключено</p>`;
@@ -1095,9 +1143,9 @@ function _integrationSliceHtml(title, slice) {
       : "";
   const check = slice.last_check || {};
   const providerLabel = slice.brand_label || slice.provider_kind || "—";
-  const checkStatus = check.status || "—";
+  const checkStatus = _integrationCheckLabel(slice);
   const checkError =
-    checkStatus === "failed" && check.error_code
+    (check.status || "") === "failed" && check.error_code
       ? ` · ${integrationErrorMessage(check.error_code)}`
       : "";
   return `<div class="integration-slice-summary">
@@ -1258,16 +1306,23 @@ function _integrationStatusMeta(entity) {
   }
   const active = entity?.active;
   const candidate = entity?.candidate;
+  if (!active && !candidate) {
+    return { label: "Не настроено", tone: "empty" };
+  }
   if (active && active.state === "active") {
+    const base = _integrationSliceConnectionMeta(active);
     if (candidate) {
-      return { label: "Активно · черновик", tone: "active" };
+      return { label: `${base.label} · черновик`, tone: base.tone };
     }
-    return { label: "Активно", tone: "active" };
+    return base;
   }
   if (candidate) {
     return { label: "Черновик", tone: "candidate" };
   }
-  return { label: "Не подключено", tone: "empty" };
+  if (active) {
+    return _integrationSliceConnectionMeta(active);
+  }
+  return { label: "Не настроено", tone: "empty" };
 }
 
 function _integrationProviderLabel(entity) {
@@ -1360,18 +1415,30 @@ function _instanceMeta(kind) {
   return ADMIN_INSTANCE_KINDS.find((m) => m.kind === kind) || { kind, title: kind, hint: "", modelLabel: null };
 }
 
+function _isInstanceUsable(inst) {
+  const rev = inst?.active;
+  if (!rev || rev.state !== "active" || inst.state !== "active") {
+    return false;
+  }
+  if (!rev.enabled) {
+    return false;
+  }
+  if (rev.runtime_mode === "live" && !rev.has_secret) {
+    return false;
+  }
+  return true;
+}
+
 function _activeInstances(kind) {
-  return (state.adminIntegrations.instances?.[kind]?.items || []).filter(
-    (inst) => inst.active && inst.state === "active"
-  );
+  return (state.adminIntegrations.instances?.[kind]?.items || []).filter(_isInstanceUsable);
 }
 
 function _instanceSliceHtml(title, slice) {
   if (!slice) return `<p class="hint">Ещё не подключено</p>`;
   const check = slice.last_check || {};
-  const checkStatus = check.status || "—";
+  const checkStatus = _integrationCheckLabel(slice);
   const checkError =
-    checkStatus === "failed" && check.error_code
+    (check.status || "") === "failed" && check.error_code
       ? ` · ${integrationErrorMessage(check.error_code)}`
       : "";
   const endpoint = slice.endpoint
