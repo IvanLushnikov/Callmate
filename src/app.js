@@ -1426,6 +1426,18 @@ async function refreshCampaigns() {
   persistCampaigns();
 }
 
+function mapAnalyticsSummary(summary) {
+  if (!summary || typeof summary !== "object") return null;
+  return {
+    calls: summary.calls ?? summary.calls_total ?? 0,
+    avgDuration: summary.avg_duration || summary.avgDuration || "—",
+    goalReached: summary.goal_reached ?? summary.goalReached ?? 0,
+    completedTopics: summary.completed_topics ?? summary.completedTopics ?? 0,
+    minutes: summary.minutes ?? summary.minutes_total ?? 0,
+    cost: summary.cost_rub ?? summary.cost ?? 0,
+  };
+}
+
 async function refreshCampaignDialState(camp) {
   if (!hasApi() || !camp?.id) return camp;
   const data = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}`, {
@@ -1433,6 +1445,18 @@ async function refreshCampaignDialState(camp) {
   });
   if (data?.dial_state) camp.dial_state = data.dial_state;
   if (data?.ever_started != null) camp.ever_started = Boolean(data.ever_started);
+  persistCampaigns();
+  return camp;
+}
+
+async function refreshCampaignAnalytics(camp) {
+  if (!hasApi() || !camp?.id) return camp;
+  const summary = await apiFetch(
+    `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/analytics/summary`,
+    { session: state.session }
+  );
+  const mapped = mapAnalyticsSummary(summary);
+  if (mapped) camp.analytics = mapped;
   persistCampaigns();
   return camp;
 }
@@ -1447,6 +1471,7 @@ function ensureDialStatePoll() {
       try {
         await refreshCampaignDialState(camp);
         await refreshCampaignContacts(camp);
+        await refreshCampaignAnalytics(camp);
         render();
       } catch {
         /* keep prior table; no fake status churn */
@@ -3729,22 +3754,8 @@ function render() {
     if (hasApi() && cabinet.page === "analytics") {
       const camp = activeCampaign();
       if (camp) {
-        void apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/analytics/summary`, {
-          session: state.session,
-        })
-          .then((summary) => {
-            camp.analytics = {
-              calls: summary.calls ?? summary.calls_total ?? 0,
-              avgDuration: summary.avg_duration || summary.avgDuration || "—",
-              // BE-199: «до цели» из вердиктов/marks_goal_reached — не completed_topics
-              goalReached: summary.goal_reached ?? summary.goalReached ?? 0,
-              completedTopics: summary.completed_topics ?? summary.completedTopics ?? 0,
-              minutes: summary.minutes ?? summary.minutes_total ?? 0,
-              cost: summary.cost_rub ?? summary.cost ?? 0,
-            };
-            persistCampaigns();
-            render();
-          })
+        void refreshCampaignAnalytics(camp)
+          .then(() => render())
           .catch((e) => flash(errorMessage(e?.code), "error"));
       }
     }
@@ -5637,11 +5648,14 @@ function bindContacts() {
             `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/cancel`,
             { method: "POST", session: state.session }
           );
+          done += 1;
+        } else {
+          ct.status = STATUS.cancel;
+          done += 1;
         }
-        ct.status = STATUS.cancel;
-        done += 1;
       }
-      persistCampaigns();
+      if (hasApi()) await reloadCampaignContactsList(camp);
+      else persistCampaigns();
       if (msg) {
         msg.textContent =
           skipped && done ? `Сняли: ${done}. Пропустили: ${skipped}` : done ? "Сняли с обзвона" : "Выберите номера";
@@ -5673,11 +5687,14 @@ function bindContacts() {
             `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/restore`,
             { method: "POST", session: state.session }
           );
+          done += 1;
+        } else {
+          ct.status = STATUS.in_progress;
+          done += 1;
         }
-        ct.status = STATUS.in_progress;
-        done += 1;
       }
-      persistCampaigns();
+      if (hasApi()) await reloadCampaignContactsList(camp);
+      else persistCampaigns();
       if (msg) {
         msg.textContent =
           skipped && done ? `Вернули: ${done}. Пропустили: ${skipped}` : done ? "Вернули в обзвон" : "Выберите номера";
@@ -6240,6 +6257,8 @@ function bindLaunch() {
           session: state.session,
         });
         await refreshCampaignDialState(camp);
+        await refreshCampaignContacts(camp);
+        await refreshCampaignAnalytics(camp).catch(() => {});
         // Do not invent contact outcomes locally — server/worker owns dial.
         persistCampaigns();
         flash("Обзвон поставлен в работу. Набор по очереди — следующий этап");
@@ -6264,12 +6283,11 @@ function bindLaunch() {
         prog.textContent = "Ставим на паузу…";
       }
       try {
-        const res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/pause`, {
+        await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/pause`, {
           method: "POST",
           session: state.session,
         });
-        camp.dial_state = res.dial_state || "paused";
-        persistCampaigns();
+        await refreshCampaignDialState(camp);
         flash("На паузе. Текущий разговор закончим. Новые звонки не начнём");
         ensureDialStatePoll();
         render();
@@ -6287,12 +6305,11 @@ function bindLaunch() {
         return;
       }
       try {
-        const res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/resume`, {
+        await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/resume`, {
           method: "POST",
           session: state.session,
         });
-        camp.dial_state = res.dial_state || "running";
-        persistCampaigns();
+        await refreshCampaignDialState(camp);
         ensureDialStatePoll();
         render();
       } catch (err) {
@@ -6319,12 +6336,11 @@ function bindLaunch() {
         prog.textContent = "Останавливаем…";
       }
       try {
-        const res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/stop`, {
+        await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/stop`, {
           method: "POST",
           session: state.session,
         });
-        camp.dial_state = res.dial_state || "stopped";
-        persistCampaigns();
+        await refreshCampaignDialState(camp);
         flash("Остановлен. Текущий разговор договорим");
         render();
       } catch (err) {
