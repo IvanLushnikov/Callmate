@@ -40,6 +40,8 @@ export const ERROR_MESSAGES = {
   validation_error: "Проверьте поля",
   revision_conflict: "Данные устарели — обновите страницу и повторите",
   invalid_provider: "Такой провайдер недоступен",
+  provider_not_available_for_kind: "Этот провайдер не подходит для этого блока",
+  invalid_field: "Проверьте поля",
   invalid_model: "Выберите модель из списка",
   custom_endpoint_forbidden: "Свой адрес сервера указать нельзя",
   secret_not_configured: "Сначала запишите API-ключ",
