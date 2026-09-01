@@ -25,10 +25,30 @@ const checks = [
   ["data-us243-proxy", "US-243"],
   ["Запуск за день", "US-243"],
   ["speedPromiseBannerHtml", "US-243"],
+  ["refreshCampaignAnalytics", "W2-dial"],
+  ["mapAnalyticsSummary", "W2-dial"],
+  ["await refreshCampaignDialState(camp)", "W2-dial"],
+  ["res.dial_state ||", "W2-dial-absent"],
+  ["dialModeBannerHtml", "W3-stub-live"],
+  ["runtimeModeBadgeHtml", "W3-stub-live"],
+  ["refreshRuntime", "W3-stub-live"],
+  ["/api/cabinet/runtime", "W3-stub-live"],
+  ["data-testid=\"dial-mode-banner\"", "W3-stub-live"],
+  ["Лабораторный режим", "W3-stub-live"],
+  ["analyticsCostFromSummary", "W4-analytics"],
+  ["refreshAllCampaignAnalytics", "W4-analytics"],
+  ["minutes * state.companyTariff", "W4-analytics-absent"],
 ];
 
 let failed = 0;
 for (const [needle, tag] of checks) {
+  if (tag === "W2-dial-absent" || tag === "W4-analytics-absent") {
+    if (appJs.includes(needle)) {
+      console.error(`FAIL ${tag}: stale local fallback still present (${needle})`);
+      failed += 1;
+    }
+    continue;
+  }
   if (!appJs.includes(needle)) {
     console.error(`FAIL ${tag}: missing ${needle}`);
     failed += 1;

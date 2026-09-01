@@ -181,8 +181,10 @@ const state = {
     contactsUploading: false,
     uploadCancelRequested: false,
     telephonyLoaded: false,
+    runtimeLoaded: false,
     cabinetMeLoaded: false,
     campaignsLoaded: false,
+    analyticsLoaded: false,
     gateErrors: [],
     statusExpandKey: null,
     scheduleDrawerOpen: false,
@@ -226,6 +228,7 @@ const state = {
     feedback: {},
     busy: {},
   },
+  runtime: null,
 };
 
 function persistCampaigns() {
@@ -650,6 +653,49 @@ function impersonateBanner() {
     <strong>Вы в кабинете «${escapeHtml(name)}» как суперадмин</strong>
     <button class="btn secondary" type="button" id="exit-impersonate">Выйти в админку</button>
   </div>`;
+}
+
+/** Server/runtime dial mode — stub vs live_sip (wave 3 honesty). */
+function runtimeDialMode() {
+  if (!hasApi()) return "offline";
+  return state.runtime?.dial_mode || state.runtime?.adapters?.telephony || "unknown";
+}
+
+function runtimeModeBadgeHtml() {
+  const mode = runtimeDialMode();
+  if (mode === "offline") {
+    return `<span class="runtime-mode-badge runtime-mode-badge--offline" data-testid="runtime-mode-badge" title="Нет подключения к серверу">Без сервера</span>`;
+  }
+  if (mode === "live_sip") {
+    return `<span class="runtime-mode-badge runtime-mode-badge--live" data-testid="runtime-mode-badge" title="Worker набирает через SIP">Живой обзвон</span>`;
+  }
+  if (mode === "stub") {
+    return `<span class="runtime-mode-badge runtime-mode-badge--stub" data-testid="runtime-mode-badge" title="Звонки имитируются, реального дозвона нет">Учебный обзвон</span>`;
+  }
+  return "";
+}
+
+function dialModeBannerHtml() {
+  const mode = runtimeDialMode();
+  if (mode === "offline") {
+    return `<div class="banner banner-warn dial-mode-banner" data-testid="dial-mode-banner" role="status">
+      <strong>Кабинет без сервера</strong>
+      <p class="hint">Обзвон не запустится — данные хранятся только в этом браузере.</p>
+    </div>`;
+  }
+  if (mode === "stub") {
+    return `<div class="banner banner-warn dial-mode-banner" data-testid="dial-mode-banner" role="status">
+      <strong>Лабораторный режим</strong>
+      <p class="hint">Звонки имитируются — реального дозвона нет. Статусы и транскрипты учебные.</p>
+    </div>`;
+  }
+  if (mode === "live_sip") {
+    return `<div class="banner banner-info dial-mode-banner" data-testid="dial-mode-banner" role="status">
+      <strong>Живые звонки</strong>
+      <p class="hint">Worker набирает через SIP. Результаты — с сервера.</p>
+    </div>`;
+  }
+  return "";
 }
 
 function appTabsHtml(activeTab, tabs = CABINET_TABS) {
@@ -1332,7 +1378,7 @@ function mapCampaignFromApi(c, existing = {}) {
       archetype_locked: c.archetype_locked != null ? Boolean(c.archetype_locked) : false,
       knowledge_pack: c.knowledge_pack && typeof c.knowledge_pack === "object" ? c.knowledge_pack : {},
       generate_warnings: Array.isArray(c.generate_warnings) ? c.generate_warnings : [],
-      analytics: existing.analytics,
+      analytics: null,
     });
   }
   return emptyCampaign({
@@ -1419,11 +1465,53 @@ async function refreshCampaigns() {
       name: prev.name,
       contacts: prev.contacts,
       columns: prev.columns,
-      analytics: prev.analytics,
     });
   });
   state.ui.campaignsLoaded = true;
   persistCampaigns();
+}
+
+function mapAnalyticsSummary(summary) {
+  if (!summary || typeof summary !== "object") return null;
+  const costRub = summary.cost_rub ?? summary.cost;
+  return {
+    calls: summary.calls ?? summary.calls_total ?? 0,
+    avgDuration: formatAnalyticsDuration(summary.avg_duration_sec ?? summary.avg_duration),
+    goalReached: summary.goal_reached ?? summary.goalReached ?? 0,
+    completedTopics: summary.completed_topics ?? summary.completedTopics ?? 0,
+    minutes: summary.minutes ?? summary.minutes_total ?? 0,
+    pricePerMinute: summary.price_per_minute ?? summary.pricePerMinute ?? null,
+    cost: costRub != null ? Number(costRub) : null,
+    cost_rub: costRub != null ? Number(costRub) : null,
+  };
+}
+
+function formatAnalyticsDuration(raw) {
+  if (raw == null || raw === "" || raw === "—") return "—";
+  const sec = Number(raw);
+  if (!Number.isFinite(sec) || sec <= 0) return "—";
+  if (sec < 60) return `${Math.round(sec)} с`;
+  const mins = Math.floor(sec / 60);
+  const rest = Math.round(sec % 60);
+  return `${mins}:${String(rest).padStart(2, "0")}`;
+}
+
+/** Server-authoritative cost only — never derive from local tariff/minutes cache. */
+function analyticsCostFromSummary(a) {
+  if (!a || typeof a !== "object") return null;
+  if (a.cost_rub != null) return Number(a.cost_rub);
+  if (a.cost != null) return Number(a.cost);
+  return null;
+}
+
+function analyticsTariffHint(a) {
+  const tariff = a?.pricePerMinute ?? a?.price_per_minute ?? state.companyTariff;
+  return tariff != null && Number(tariff) > 0 ? `Тариф ${tariff} ₽/мин` : "С сервера";
+}
+
+async function refreshAllCampaignAnalytics() {
+  if (!hasApi() || !state.campaigns.length) return;
+  await Promise.all(state.campaigns.map((c) => refreshCampaignAnalytics(c).catch(() => c)));
 }
 
 async function refreshCampaignDialState(camp) {
@@ -1433,6 +1521,18 @@ async function refreshCampaignDialState(camp) {
   });
   if (data?.dial_state) camp.dial_state = data.dial_state;
   if (data?.ever_started != null) camp.ever_started = Boolean(data.ever_started);
+  persistCampaigns();
+  return camp;
+}
+
+async function refreshCampaignAnalytics(camp) {
+  if (!hasApi() || !camp?.id) return camp;
+  const summary = await apiFetch(
+    `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/analytics/summary`,
+    { session: state.session }
+  );
+  const mapped = mapAnalyticsSummary(summary);
+  if (mapped) camp.analytics = mapped;
   persistCampaigns();
   return camp;
 }
@@ -1447,6 +1547,7 @@ function ensureDialStatePoll() {
       try {
         await refreshCampaignDialState(camp);
         await refreshCampaignContacts(camp);
+        await refreshCampaignAnalytics(camp);
         render();
       } catch {
         /* keep prior table; no fake status churn */
@@ -1729,7 +1830,7 @@ function pageAnalytics() {
               const calls = a?.calls ?? a?.calls_total ?? 0;
               const reached = a?.goalReached ?? a?.goal_reached ?? 0;
               const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
-              const cost = a?.cost ?? a?.cost_rub ?? (a?.minutes || 0) * state.companyTariff;
+              const cost = analyticsCostFromSummary(a);
               const prog = contactPipelineStats(c);
               const progress =
                 c.dial_state === "running" || c.dial_state === "paused"
@@ -1748,7 +1849,7 @@ function pageAnalytics() {
               <td>${statusBadgeHtml(c, { compact: true })}</td>
               <td>${escapeHtml(progress)}</td>
               <td>${escapeHtml(conv)}</td>
-              <td>${hasCampaignCalls(c) ? `${escapeHtml(String(cost))} ₽` : "—"}</td>
+              <td>${hasCampaignCalls(c) && cost != null ? `${escapeHtml(String(cost))} ₽` : "—"}</td>
               <td>${escapeHtml(activity)}</td>
             </tr>`;
             })
@@ -1797,14 +1898,15 @@ function blockCampaignAnalytics(camp) {
   }
   const calls = a?.calls ?? a?.calls_total ?? 0;
   const reached = a?.goalReached ?? a?.goal_reached ?? 0;
-  const minutes = a?.minutes ?? a?.minutes_total ?? 0;
-  const cost = a?.cost ?? a?.cost_rub ?? minutes * state.companyTariff;
+  const cost = analyticsCostFromSummary(a);
+  const avgDuration = a?.avgDuration ?? formatAnalyticsDuration(a?.avg_duration_sec);
   const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
   return `<div class="metrics-grid metrics-grid-4">
       ${analyticsMetric("Звонков", calls)}
       ${analyticsMetric("Дозвоны / целевые", `${reached}`, "Итоги по цели")}
       ${analyticsMetric("Конверсия", conv)}
-      ${analyticsMetric("Стоимость", `${cost} ₽`, `Тариф ${state.companyTariff} ₽/мин`)}
+      ${analyticsMetric("Средняя длительность", avgDuration || "—")}
+      ${analyticsMetric("Стоимость", cost != null ? `${cost} ₽` : "—", analyticsTariffHint(a))}
     </div>
     <div class="row-actions analytics-export-row">
       <button class="btn secondary" type="button" id="export-excel">Скачать Excel</button>
@@ -2185,7 +2287,7 @@ function blockCallProgress(camp) {
   const calls = a.calls ?? a.calls_total ?? prog.called;
   const reached = a.goalReached ?? a.goal_reached ?? prog.done;
   const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
-  const cost = a.cost ?? a.cost_rub ?? (a.minutes || 0) * state.companyTariff;
+  const cost = analyticsCostFromSummary(a);
   const funnel = `<div class="call-funnel" role="img" aria-label="Воронка результатов">
     <div class="funnel-step"><span class="funnel-value">${prog.inQueue}</span><span class="funnel-label">В очереди</span></div>
     <div class="funnel-step"><span class="funnel-value">${calls}</span><span class="funnel-label">Звонков</span></div>
@@ -2212,7 +2314,7 @@ function blockCallProgress(camp) {
       ${analyticsMetric("В очереди", prog.inQueue)}
       ${analyticsMetric("Звонков", calls)}
       ${analyticsMetric("Конверсия", conv)}
-      ${analyticsMetric("Потрачено", `${cost} ₽`)}
+      ${analyticsMetric("Потрачено", cost != null ? `${cost} ₽` : "—")}
     </div>
     ${funnel}
     ${
@@ -2344,6 +2446,7 @@ function workspaceOverviewTab(camp, weak, started) {
   );
 
   return `<div class="workspace-tab-panel" data-tab="overview">
+    ${dialModeBannerHtml()}
     ${speedPromiseBannerHtml()}
     ${launchChecklistHtml(camp)}
     <div class="onboard-steps">${step1Simple}${step2}${step3}${step4}</div>
@@ -2381,7 +2484,7 @@ function campaignWorkspace(camp) {
   else if (tab === "contacts") tabContent = `<div class="workspace-tab-panel" data-tab="contacts">${blockNumbers(camp)}</div>`;
   else if (tab === "scenario") tabContent = `<div class="workspace-tab-panel" data-tab="scenario">${blockScenarioFlow(camp, weak, started)}</div>`;
   else if (tab === "calls")
-    tabContent = `<div class="workspace-tab-panel" data-tab="calls">${blockCallProgress(camp)}${blockCallQuality(camp)}</div>`;
+    tabContent = `<div class="workspace-tab-panel" data-tab="calls">${dialModeBannerHtml()}${blockCallProgress(camp)}${blockCallQuality(camp)}</div>`;
   else if (tab === "results")
     tabContent = `<div class="workspace-tab-panel" data-tab="results">${hasCampaignCalls(camp) ? blockBusinessOutcomes(camp) + blockCampaignAnalytics(camp) : `<div class="results-placeholder panel"><p class="hint results-placeholder-title">После первого звонка здесь появятся итоги и метрики</p>${blockBusinessOutcomes(camp)}</div>`}</div>`;
   else if (tab === "settings")
@@ -2417,6 +2520,7 @@ function campaignWorkspace(camp) {
           </div>
           <div class="workspace-toolbar">
             <span class="workspace-readiness" title="Готовность к запуску">${completed} из ${total}</span>
+            ${runtimeModeBadgeHtml()}
             ${balanceChipHtml({ className: "balance-chip--workspace" })}
             <div class="workspace-summary-actions">${dialActionsHtml(camp)}</div>
           </div>
@@ -2919,6 +3023,7 @@ function sectionTelephony() {
       )}
     </div>
     ${telWarn && !t.checking ? `<div class="banner banner-danger desk-banner"><strong>Не удалось подключить телефонию</strong><p class="hint">${escapeHtml(statusHint)}</p></div>` : ""}
+    ${hasApi() ? dialModeBannerHtml() : `<div class="banner banner-warn desk-banner" data-testid="dial-mode-banner"><strong>Без сервера</strong><p class="hint">Телефония сохранится только в браузере — проверка связи недоступна.</p></div>`}
     ${statusActions}
     ${t.checking ? "" : linesField(linesVal)}
     ${expand ? `<div class="tel-form-expand">${expand}</div>` : ""}`;
@@ -3706,6 +3811,14 @@ function render() {
         .then(() => render())
         .catch((e) => flash(errorMessage(e?.code), "error"));
     }
+    if (hasApi() && !state.ui.runtimeLoaded && state.session && canCabinet) {
+      state.ui.runtimeLoaded = true;
+      void refreshRuntime()
+        .then(() => render())
+        .catch(() => {
+          state.ui.runtimeLoaded = false;
+        });
+    }
     if (
       hasApi() &&
       !state.ui.campaignsLoaded &&
@@ -3726,27 +3839,14 @@ function render() {
           flash(errorMessage(e?.code), "error");
         });
     }
-    if (hasApi() && cabinet.page === "analytics") {
-      const camp = activeCampaign();
-      if (camp) {
-        void apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/analytics/summary`, {
-          session: state.session,
-        })
-          .then((summary) => {
-            camp.analytics = {
-              calls: summary.calls ?? summary.calls_total ?? 0,
-              avgDuration: summary.avg_duration || summary.avgDuration || "—",
-              // BE-199: «до цели» из вердиктов/marks_goal_reached — не completed_topics
-              goalReached: summary.goal_reached ?? summary.goalReached ?? 0,
-              completedTopics: summary.completed_topics ?? summary.completedTopics ?? 0,
-              minutes: summary.minutes ?? summary.minutes_total ?? 0,
-              cost: summary.cost_rub ?? summary.cost ?? 0,
-            };
-            persistCampaigns();
-            render();
-          })
-          .catch((e) => flash(errorMessage(e?.code), "error"));
-      }
+    if (hasApi() && cabinet.page === "analytics" && !state.ui.analyticsLoaded) {
+      state.ui.analyticsLoaded = true;
+      void refreshAllCampaignAnalytics()
+        .then(() => render())
+        .catch((e) => {
+          state.ui.analyticsLoaded = false;
+          flash(errorMessage(e?.code), "error");
+        });
     }
     if (hasApi() && (cabinet.page === "tariffs" || cabinet.page === "account" || cabinet.page === "workspace")) {
       void refreshCabinetMe()
@@ -4475,6 +4575,8 @@ function bindAdminForms() {
           state.impersonate = { id: c.id, name: c.name, companyId: c.id };
           saveJson("scx_impersonate", state.impersonate, sessionStorage);
           localStorage.removeItem("scx_impersonate");
+          state.ui.cabinetMeLoaded = false;
+          await refreshCabinetMe();
         } else {
           state.impersonate = { id: c.id, name: c.name };
           saveJson("scx_impersonate", state.impersonate, sessionStorage);
@@ -5327,6 +5429,16 @@ async function refreshTelephony() {
   applyTelephonyPayload(data);
 }
 
+async function refreshRuntime() {
+  if (!hasApi()) {
+    state.runtime = null;
+    return null;
+  }
+  const data = await apiFetch("/api/cabinet/runtime", { session: state.session });
+  state.runtime = data;
+  return data;
+}
+
 function bindTelephony() {
   document.querySelectorAll("[data-open-tel]").forEach((btn) => {
     btn.onclick = () => {
@@ -5348,7 +5460,7 @@ function bindTelephony() {
       if (locked()) return;
       if (!saveLinesFromForm()) return;
       if (!hasApi()) {
-        flash("Сохранено");
+        flash("Сохранено только локально — без сервера телефония не проверится", "warn");
         return;
       }
       try {
@@ -5389,7 +5501,7 @@ function bindTelephony() {
         state.telephony.sip_login = sip_login;
         document.getElementById("sip-password").value = "";
         persistTelephony();
-        flash("Сохранено");
+        flash("Сохранено только локально — без сервера телефония не проверится", "warn");
         return;
       }
       try {
@@ -5637,11 +5749,14 @@ function bindContacts() {
             `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/cancel`,
             { method: "POST", session: state.session }
           );
+          done += 1;
+        } else {
+          ct.status = STATUS.cancel;
+          done += 1;
         }
-        ct.status = STATUS.cancel;
-        done += 1;
       }
-      persistCampaigns();
+      if (hasApi()) await reloadCampaignContactsList(camp);
+      else persistCampaigns();
       if (msg) {
         msg.textContent =
           skipped && done ? `Сняли: ${done}. Пропустили: ${skipped}` : done ? "Сняли с обзвона" : "Выберите номера";
@@ -5673,11 +5788,14 @@ function bindContacts() {
             `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/contacts/${encodeURIComponent(ct.id)}/restore`,
             { method: "POST", session: state.session }
           );
+          done += 1;
+        } else {
+          ct.status = STATUS.in_progress;
+          done += 1;
         }
-        ct.status = STATUS.in_progress;
-        done += 1;
       }
-      persistCampaigns();
+      if (hasApi()) await reloadCampaignContactsList(camp);
+      else persistCampaigns();
       if (msg) {
         msg.textContent =
           skipped && done ? `Вернули: ${done}. Пропустили: ${skipped}` : done ? "Вернули в обзвон" : "Выберите номера";
@@ -6240,6 +6358,8 @@ function bindLaunch() {
           session: state.session,
         });
         await refreshCampaignDialState(camp);
+        await refreshCampaignContacts(camp);
+        await refreshCampaignAnalytics(camp).catch(() => {});
         // Do not invent contact outcomes locally — server/worker owns dial.
         persistCampaigns();
         flash("Обзвон поставлен в работу. Набор по очереди — следующий этап");
@@ -6264,12 +6384,11 @@ function bindLaunch() {
         prog.textContent = "Ставим на паузу…";
       }
       try {
-        const res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/pause`, {
+        await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/pause`, {
           method: "POST",
           session: state.session,
         });
-        camp.dial_state = res.dial_state || "paused";
-        persistCampaigns();
+        await refreshCampaignDialState(camp);
         flash("На паузе. Текущий разговор закончим. Новые звонки не начнём");
         ensureDialStatePoll();
         render();
@@ -6287,12 +6406,11 @@ function bindLaunch() {
         return;
       }
       try {
-        const res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/resume`, {
+        await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/resume`, {
           method: "POST",
           session: state.session,
         });
-        camp.dial_state = res.dial_state || "running";
-        persistCampaigns();
+        await refreshCampaignDialState(camp);
         ensureDialStatePoll();
         render();
       } catch (err) {
@@ -6319,12 +6437,11 @@ function bindLaunch() {
         prog.textContent = "Останавливаем…";
       }
       try {
-        const res = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/stop`, {
+        await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/stop`, {
           method: "POST",
           session: state.session,
         });
-        camp.dial_state = res.dial_state || "stopped";
-        persistCampaigns();
+        await refreshCampaignDialState(camp);
         flash("Остановлен. Текущий разговор договорим");
         render();
       } catch (err) {
@@ -6482,7 +6599,7 @@ function bindAnalytics() {
       const blob = res instanceof Response ? await res.blob() : res;
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "analytics.csv";
+      a.download = "export.xlsx";
       a.click();
       if (st) {
         st.textContent = "";
@@ -6538,8 +6655,11 @@ function clearSession() {
   state.impersonate = null;
   state.ui.adminLoaded = false;
   state.ui.telephonyLoaded = false;
+  state.ui.runtimeLoaded = false;
   state.ui.campaignsLoaded = false;
+  state.ui.analyticsLoaded = false;
   state.ui.cabinetMeLoaded = false;
+  state.runtime = null;
   writeSessionToken("");
   try {
     sessionStorage.removeItem("scx_impersonate");
