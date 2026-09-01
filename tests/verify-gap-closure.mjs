@@ -35,13 +35,16 @@ const checks = [
   ["/api/cabinet/runtime", "W3-stub-live"],
   ["data-testid=\"dial-mode-banner\"", "W3-stub-live"],
   ["Лабораторный режим", "W3-stub-live"],
+  ["analyticsCostFromSummary", "W4-analytics"],
+  ["refreshAllCampaignAnalytics", "W4-analytics"],
+  ["minutes * state.companyTariff", "W4-analytics-absent"],
 ];
 
 let failed = 0;
 for (const [needle, tag] of checks) {
-  if (tag === "W2-dial-absent") {
+  if (tag === "W2-dial-absent" || tag === "W4-analytics-absent") {
     if (appJs.includes(needle)) {
-      console.error(`FAIL ${tag}: optimistic dial_state fallback still present (${needle})`);
+      console.error(`FAIL ${tag}: stale local fallback still present (${needle})`);
       failed += 1;
     }
     continue;
