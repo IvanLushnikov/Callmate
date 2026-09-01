@@ -15,17 +15,14 @@
   <body>
     <div id="app"></div>
     <script>
-      // Production API. On localhost use same-origin proxy (scripts/dev-server.py).
-      // On self-hosted scorix.ru — same origin (/api via nginx).
+      // GitHub Pages demo → Render API. Любой свой домен → same origin (/api).
       (function () {
         var host = location.hostname;
         var local =
           host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-        var selfHosted =
-          host === "scorix.ru" ||
-          host.endsWith(".scorix.ru");
+        var githubPages = host.endsWith(".github.io");
         window.SCORIX_API_BASE =
-          local || selfHosted
+          local || !githubPages
             ? location.origin
             : "https://callmate-api.onrender.com";
       })();
