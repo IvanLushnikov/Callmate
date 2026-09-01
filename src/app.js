@@ -184,6 +184,7 @@ const state = {
     runtimeLoaded: false,
     cabinetMeLoaded: false,
     campaignsLoaded: false,
+    analyticsLoaded: false,
     gateErrors: [],
     statusExpandKey: null,
     scheduleDrawerOpen: false,
@@ -1377,7 +1378,7 @@ function mapCampaignFromApi(c, existing = {}) {
       archetype_locked: c.archetype_locked != null ? Boolean(c.archetype_locked) : false,
       knowledge_pack: c.knowledge_pack && typeof c.knowledge_pack === "object" ? c.knowledge_pack : {},
       generate_warnings: Array.isArray(c.generate_warnings) ? c.generate_warnings : [],
-      analytics: existing.analytics,
+      analytics: null,
     });
   }
   return emptyCampaign({
@@ -1464,7 +1465,6 @@ async function refreshCampaigns() {
       name: prev.name,
       contacts: prev.contacts,
       columns: prev.columns,
-      analytics: prev.analytics,
     });
   });
   state.ui.campaignsLoaded = true;
@@ -1473,14 +1473,45 @@ async function refreshCampaigns() {
 
 function mapAnalyticsSummary(summary) {
   if (!summary || typeof summary !== "object") return null;
+  const costRub = summary.cost_rub ?? summary.cost;
   return {
     calls: summary.calls ?? summary.calls_total ?? 0,
-    avgDuration: summary.avg_duration || summary.avgDuration || "—",
+    avgDuration: formatAnalyticsDuration(summary.avg_duration_sec ?? summary.avg_duration),
     goalReached: summary.goal_reached ?? summary.goalReached ?? 0,
     completedTopics: summary.completed_topics ?? summary.completedTopics ?? 0,
     minutes: summary.minutes ?? summary.minutes_total ?? 0,
-    cost: summary.cost_rub ?? summary.cost ?? 0,
+    pricePerMinute: summary.price_per_minute ?? summary.pricePerMinute ?? null,
+    cost: costRub != null ? Number(costRub) : null,
+    cost_rub: costRub != null ? Number(costRub) : null,
   };
+}
+
+function formatAnalyticsDuration(raw) {
+  if (raw == null || raw === "" || raw === "—") return "—";
+  const sec = Number(raw);
+  if (!Number.isFinite(sec) || sec <= 0) return "—";
+  if (sec < 60) return `${Math.round(sec)} с`;
+  const mins = Math.floor(sec / 60);
+  const rest = Math.round(sec % 60);
+  return `${mins}:${String(rest).padStart(2, "0")}`;
+}
+
+/** Server-authoritative cost only — never derive from local tariff/minutes cache. */
+function analyticsCostFromSummary(a) {
+  if (!a || typeof a !== "object") return null;
+  if (a.cost_rub != null) return Number(a.cost_rub);
+  if (a.cost != null) return Number(a.cost);
+  return null;
+}
+
+function analyticsTariffHint(a) {
+  const tariff = a?.pricePerMinute ?? a?.price_per_minute ?? state.companyTariff;
+  return tariff != null && Number(tariff) > 0 ? `Тариф ${tariff} ₽/мин` : "С сервера";
+}
+
+async function refreshAllCampaignAnalytics() {
+  if (!hasApi() || !state.campaigns.length) return;
+  await Promise.all(state.campaigns.map((c) => refreshCampaignAnalytics(c).catch(() => c)));
 }
 
 async function refreshCampaignDialState(camp) {
@@ -1799,7 +1830,7 @@ function pageAnalytics() {
               const calls = a?.calls ?? a?.calls_total ?? 0;
               const reached = a?.goalReached ?? a?.goal_reached ?? 0;
               const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
-              const cost = a?.cost ?? a?.cost_rub ?? (a?.minutes || 0) * state.companyTariff;
+              const cost = analyticsCostFromSummary(a);
               const prog = contactPipelineStats(c);
               const progress =
                 c.dial_state === "running" || c.dial_state === "paused"
@@ -1818,7 +1849,7 @@ function pageAnalytics() {
               <td>${statusBadgeHtml(c, { compact: true })}</td>
               <td>${escapeHtml(progress)}</td>
               <td>${escapeHtml(conv)}</td>
-              <td>${hasCampaignCalls(c) ? `${escapeHtml(String(cost))} ₽` : "—"}</td>
+              <td>${hasCampaignCalls(c) && cost != null ? `${escapeHtml(String(cost))} ₽` : "—"}</td>
               <td>${escapeHtml(activity)}</td>
             </tr>`;
             })
@@ -1867,14 +1898,15 @@ function blockCampaignAnalytics(camp) {
   }
   const calls = a?.calls ?? a?.calls_total ?? 0;
   const reached = a?.goalReached ?? a?.goal_reached ?? 0;
-  const minutes = a?.minutes ?? a?.minutes_total ?? 0;
-  const cost = a?.cost ?? a?.cost_rub ?? minutes * state.companyTariff;
+  const cost = analyticsCostFromSummary(a);
+  const avgDuration = a?.avgDuration ?? formatAnalyticsDuration(a?.avg_duration_sec);
   const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
   return `<div class="metrics-grid metrics-grid-4">
       ${analyticsMetric("Звонков", calls)}
       ${analyticsMetric("Дозвоны / целевые", `${reached}`, "Итоги по цели")}
       ${analyticsMetric("Конверсия", conv)}
-      ${analyticsMetric("Стоимость", `${cost} ₽`, `Тариф ${state.companyTariff} ₽/мин`)}
+      ${analyticsMetric("Средняя длительность", avgDuration || "—")}
+      ${analyticsMetric("Стоимость", cost != null ? `${cost} ₽` : "—", analyticsTariffHint(a))}
     </div>
     <div class="row-actions analytics-export-row">
       <button class="btn secondary" type="button" id="export-excel">Скачать Excel</button>
@@ -2255,7 +2287,7 @@ function blockCallProgress(camp) {
   const calls = a.calls ?? a.calls_total ?? prog.called;
   const reached = a.goalReached ?? a.goal_reached ?? prog.done;
   const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
-  const cost = a.cost ?? a.cost_rub ?? (a.minutes || 0) * state.companyTariff;
+  const cost = analyticsCostFromSummary(a);
   const funnel = `<div class="call-funnel" role="img" aria-label="Воронка результатов">
     <div class="funnel-step"><span class="funnel-value">${prog.inQueue}</span><span class="funnel-label">В очереди</span></div>
     <div class="funnel-step"><span class="funnel-value">${calls}</span><span class="funnel-label">Звонков</span></div>
@@ -2282,7 +2314,7 @@ function blockCallProgress(camp) {
       ${analyticsMetric("В очереди", prog.inQueue)}
       ${analyticsMetric("Звонков", calls)}
       ${analyticsMetric("Конверсия", conv)}
-      ${analyticsMetric("Потрачено", `${cost} ₽`)}
+      ${analyticsMetric("Потрачено", cost != null ? `${cost} ₽` : "—")}
     </div>
     ${funnel}
     ${
@@ -3807,13 +3839,14 @@ function render() {
           flash(errorMessage(e?.code), "error");
         });
     }
-    if (hasApi() && cabinet.page === "analytics") {
-      const camp = activeCampaign();
-      if (camp) {
-        void refreshCampaignAnalytics(camp)
-          .then(() => render())
-          .catch((e) => flash(errorMessage(e?.code), "error"));
-      }
+    if (hasApi() && cabinet.page === "analytics" && !state.ui.analyticsLoaded) {
+      state.ui.analyticsLoaded = true;
+      void refreshAllCampaignAnalytics()
+        .then(() => render())
+        .catch((e) => {
+          state.ui.analyticsLoaded = false;
+          flash(errorMessage(e?.code), "error");
+        });
     }
     if (hasApi() && (cabinet.page === "tariffs" || cabinet.page === "account" || cabinet.page === "workspace")) {
       void refreshCabinetMe()
@@ -4542,6 +4575,8 @@ function bindAdminForms() {
           state.impersonate = { id: c.id, name: c.name, companyId: c.id };
           saveJson("scx_impersonate", state.impersonate, sessionStorage);
           localStorage.removeItem("scx_impersonate");
+          state.ui.cabinetMeLoaded = false;
+          await refreshCabinetMe();
         } else {
           state.impersonate = { id: c.id, name: c.name };
           saveJson("scx_impersonate", state.impersonate, sessionStorage);
@@ -6564,7 +6599,7 @@ function bindAnalytics() {
       const blob = res instanceof Response ? await res.blob() : res;
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "analytics.csv";
+      a.download = "export.xlsx";
       a.click();
       if (st) {
         st.textContent = "";
@@ -6622,6 +6657,7 @@ function clearSession() {
   state.ui.telephonyLoaded = false;
   state.ui.runtimeLoaded = false;
   state.ui.campaignsLoaded = false;
+  state.ui.analyticsLoaded = false;
   state.ui.cabinetMeLoaded = false;
   state.runtime = null;
   writeSessionToken("");
