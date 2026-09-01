@@ -158,7 +158,7 @@ const state = {
   companyLocked: localStorage.getItem("scx_locked") === "1",
   impersonate: loadJson("scx_impersonate", null, sessionStorage) || loadJson("scx_impersonate", null),
   companies: ensureCompanyIds(loadJson("scx_companies", [])),
-  campaigns: loadJson("scx_campaigns", []),
+  campaigns: hasApi() ? [] : loadJson("scx_campaigns", []),
   telephony: loadJson("scx_telephony", {
     status: "unknown",
     provider: null,
@@ -167,8 +167,8 @@ const state = {
     lastError: null,
     checking: false,
   }),
-  companyBalance: Number(localStorage.getItem("scx_co_balance") || "500"),
-  companyTariff: Number(localStorage.getItem("scx_co_tariff") || "5"),
+  companyBalance: hasApi() ? null : Number(localStorage.getItem("scx_co_balance") || "500"),
+  companyTariff: hasApi() ? null : Number(localStorage.getItem("scx_co_tariff") || "5"),
   activeCampaignId: localStorage.getItem("scx_active_campaign") || "",
   uiFlash: null,
   ui: {
@@ -181,6 +181,7 @@ const state = {
     contactsUploading: false,
     uploadCancelRequested: false,
     telephonyLoaded: false,
+    cabinetMeLoaded: false,
     campaignsLoaded: false,
     gateErrors: [],
     statusExpandKey: null,
@@ -228,6 +229,7 @@ const state = {
 };
 
 function persistCampaigns() {
+  if (hasApi()) return;
   saveJson("scx_campaigns", state.campaigns);
 }
 
@@ -383,12 +385,15 @@ function statusBadgeHtml(camp, { compact = false } = {}) {
 }
 
 function balanceChipHtml({ className = "" } = {}) {
-  const bal = Number(state.companyBalance) || 0;
-  const tariff = Number(state.companyTariff) || 0;
-  const approx = tariff > 0 ? Math.floor(bal / tariff) : null;
-  const hint = approx != null ? `≈ ${approx} мин` : "тариф не задан";
+  const balRaw = state.companyBalance;
+  const tariffRaw = state.companyTariff;
+  const bal = balRaw == null ? null : Number(balRaw);
+  const tariff = tariffRaw == null ? 0 : Number(tariffRaw);
+  const approx = bal != null && tariff > 0 ? Math.floor(bal / tariff) : null;
+  const hint =
+    bal == null || tariffRaw == null ? "загружаем…" : approx != null ? `≈ ${approx} мин` : "тариф не задан";
   return `<a class="balance-chip${className ? ` ${className}` : ""}" href="#/cabinet/tariffs" title="Баланс и тариф">
-    <span class="balance-chip-value">${escapeHtml(String(bal))} ₽</span>
+    <span class="balance-chip-value">${escapeHtml(bal == null ? "—" : String(bal))} ₽</span>
     <span class="balance-chip-sep" aria-hidden="true">·</span>
     <span class="balance-chip-tariff">${tariff > 0 ? `${escapeHtml(String(tariff))} ₽/мин` : "—"}</span>
     <span class="balance-chip-hint">${escapeHtml(hint)}</span>
@@ -1307,6 +1312,29 @@ function mapCampaignFromApi(c, existing = {}) {
           tz: c.schedule.tz || c.schedule.region || existing.schedule?.tz || "Europe/Moscow",
         }
       : existing.schedule || emptyCampaign().schedule;
+  if (hasApi()) {
+    return emptyCampaign({
+      id: c.id,
+      name: existing.name || (c.goal || "").slice(0, 48),
+      goal: c.goal || "",
+      details: c.details || "",
+      dial_state: c.dial_state || "draft",
+      ever_started: Boolean(c.ever_started),
+      scenarioText: c.scenario_text != null ? c.scenario_text : "",
+      stages: Array.isArray(c.stages) ? c.stages : [],
+      verdicts: Array.isArray(c.verdicts) ? c.verdicts : [],
+      schedule,
+      retries: c.retries_max != null ? c.retries_max : 2,
+      contacts: existing.contacts || [],
+      columns: existing.columns || [],
+      preview: mapPreviewFromApi(c.preview, null),
+      archetype: c.archetype != null ? c.archetype : "",
+      archetype_locked: c.archetype_locked != null ? Boolean(c.archetype_locked) : false,
+      knowledge_pack: c.knowledge_pack && typeof c.knowledge_pack === "object" ? c.knowledge_pack : {},
+      generate_warnings: Array.isArray(c.generate_warnings) ? c.generate_warnings : [],
+      analytics: existing.analytics,
+    });
+  }
   return emptyCampaign({
     ...existing,
     id: c.id,
@@ -1336,6 +1364,17 @@ function mapCampaignFromApi(c, existing = {}) {
 }
 
 function mapPreviewFromApi(fromApi, existing) {
+  if (hasApi()) {
+    if (!fromApi || typeof fromApi !== "object") {
+      return { greeting: "", says: "", replies: "", tone: "" };
+    }
+    return {
+      greeting: fromApi.greeting != null ? String(fromApi.greeting) : "",
+      says: fromApi.says != null ? String(fromApi.says) : "",
+      replies: fromApi.replies != null ? String(fromApi.replies) : "",
+      tone: fromApi.tone != null ? String(fromApi.tone) : "",
+    };
+  }
   const fallback = existing || { greeting: "", says: "", replies: "", tone: "" };
   if (!fromApi || typeof fromApi !== "object") return fallback;
   return {
@@ -1374,7 +1413,15 @@ async function refreshCampaigns() {
   if (!hasApi()) return;
   const data = await apiFetch("/api/cabinet/campaigns", { session: state.session });
   const byId = Object.fromEntries(state.campaigns.map((c) => [String(c.id), c]));
-  state.campaigns = (data?.items || []).map((item) => mapCampaignFromApi(item, byId[String(item.id)] || {}));
+  state.campaigns = (data?.items || []).map((item) => {
+    const prev = byId[String(item.id)] || {};
+    return mapCampaignFromApi(item, {
+      name: prev.name,
+      contacts: prev.contacts,
+      columns: prev.columns,
+      analytics: prev.analytics,
+    });
+  });
   state.ui.campaignsLoaded = true;
   persistCampaigns();
 }
@@ -1662,15 +1709,10 @@ function pageTariffs() {
 async function refreshCabinetMe() {
   if (!hasApi() || !state.session) return;
   const me = await apiFetch("/api/cabinet/me", { session: state.session });
-  if (me.balance_rub != null) {
-    state.companyBalance = Number(me.balance_rub);
-    localStorage.setItem("scx_co_balance", String(state.companyBalance));
-  }
-  if (me.price_per_minute != null) {
-    state.companyTariff = Number(me.price_per_minute);
-    localStorage.setItem("scx_co_tariff", String(state.companyTariff));
-  }
+  if (me.balance_rub != null) state.companyBalance = Number(me.balance_rub);
+  if (me.price_per_minute != null) state.companyTariff = Number(me.price_per_minute);
   if (me.locked != null) state.companyLocked = Boolean(me.locked);
+  state.ui.cabinetMeLoaded = true;
 }
 
 function pageAnalytics() {
@@ -3277,7 +3319,14 @@ function launchBlockReasons(camp) {
   if (emptyAttr) reasons.push({ text: "У части номеров нет значения поля из сценария" });
   if (state.telephony.status !== "ok") reasons.push({ text: "Подключите телефонию", action: "tel" });
   if (!camp.schedule?.days?.length || !camp.schedule?.tz) reasons.push({ text: "Задайте расписание", action: "schedule" });
-  if (state.companyBalance <= 0 && !state.impersonate) reasons.push({ text: "Недостаточно средств", money: true });
+  if (
+    state.ui.cabinetMeLoaded &&
+    state.companyBalance != null &&
+    state.companyBalance <= 0 &&
+    !state.impersonate
+  ) {
+    reasons.push({ text: "Недостаточно средств", money: true });
+  }
   if (locked()) reasons.push({ text: "Аккаунт заблокирован" });
   if (isWeakScenario(camp) && camp.dial_state === "draft") reasons.push({ text: "Пока нельзя начать обзвон", weak: true });
   if (!hasApi()) reasons.push({ text: errorMessage("api_not_configured") });
@@ -3646,6 +3695,11 @@ function render() {
     app.innerHTML = cabinetShell(cabinet.tab, cabinetBody(cabinet));
     bindShell();
     clearFlashSoon();
+    if (hasApi() && !state.ui.cabinetMeLoaded && state.session && state.role !== "superadmin") {
+      void refreshCabinetMe()
+        .then(() => render())
+        .catch((e) => flash(errorMessage(e?.code), "error"));
+    }
     if (hasApi() && cabinet.page === "integrations" && !state.ui.telephonyLoaded) {
       state.ui.telephonyLoaded = true;
       void refreshTelephony()
@@ -4826,7 +4880,12 @@ async function performPreviewSave(camp, { name, goal, details, archetype, archet
         session: state.session,
         body,
       });
-      Object.assign(camp, mapCampaignFromApi(updated, camp));
+      Object.assign(camp, mapCampaignFromApi(updated, {
+        name: camp.name,
+        contacts: camp.contacts,
+        columns: camp.columns,
+        analytics: camp.analytics,
+      }));
       state.ui.generatePending = false;
     } else {
       camp.verdicts = ensureVerdicts(camp);
@@ -4994,7 +5053,12 @@ function bindCampaignForms() {
                 session: state.session,
               }
             );
-            Object.assign(camp, mapCampaignFromApi(generated, camp));
+            Object.assign(camp, mapCampaignFromApi(generated, {
+              name: camp.name,
+              contacts: camp.contacts,
+              columns: camp.columns,
+              analytics: camp.analytics,
+            }));
             scenarioAssembled = true;
           } catch (genEx) {
             const code = genEx?.code;
@@ -6175,7 +6239,7 @@ function bindLaunch() {
           method: "POST",
           session: state.session,
         });
-        camp.dial_state = "running";
+        await refreshCampaignDialState(camp);
         // Do not invent contact outcomes locally — server/worker owns dial.
         persistCampaigns();
         flash("Обзвон поставлен в работу. Набор по очереди — следующий этап");
@@ -6457,6 +6521,9 @@ async function restoreSession() {
   try {
     const data = await fetchSession(state.session);
     applySessionPayload({ ...data, session: state.session });
+    if (data.role !== "superadmin") {
+      await refreshCabinetMe();
+    }
   } catch (e) {
     if (e?.code === "invalid_session" || e?.status === 401) {
       clearSession();
@@ -6472,6 +6539,7 @@ function clearSession() {
   state.ui.adminLoaded = false;
   state.ui.telephonyLoaded = false;
   state.ui.campaignsLoaded = false;
+  state.ui.cabinetMeLoaded = false;
   writeSessionToken("");
   try {
     sessionStorage.removeItem("scx_impersonate");
