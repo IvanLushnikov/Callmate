@@ -948,9 +948,10 @@ function adminSettings() {
 }
 
 const INTEGRATION_ERROR_MESSAGES = {
-  auth_failed: "Ключ не принят провайдером",
+  auth_failed: "Sber не принял ключ. Нужен авторизационный ключ из кабинета, не Client Secret отдельно",
   check_failed: "Проверка не прошла",
   provider_unavailable: "Сервис недоступен, попробуйте позже",
+  secret_not_configured: "Ключ ещё не записан. Вставьте авторизационный ключ и нажмите «Записать ключ»",
 };
 
 function integrationErrorMessage(code) {
@@ -1006,15 +1007,31 @@ function _integrationSliceHtml(title, slice) {
       : "";
   const check = slice.last_check || {};
   const providerLabel = slice.brand_label || slice.provider_kind || "—";
+  const checkStatus = check.status || "—";
+  const checkError =
+    checkStatus === "failed" && check.error_code
+      ? ` · ${integrationErrorMessage(check.error_code)}`
+      : "";
   return `<div class="integration-slice-summary">
     <p><strong>${escapeHtml(title)}</strong>${lab}</p>
     <p class="hint">${escapeHtml(providerLabel)}${slice.model ? ` · ${escapeHtml(slice.model)}` : ""}</p>
-    <p class="hint">Ключ: ${slice.has_secret ? "задан" : "нет"} · проверка: ${escapeHtml(check.status || "—")}</p>
+    <p class="hint">Ключ: ${slice.has_secret ? "задан" : "нет"} · проверка: ${escapeHtml(checkStatus)}${escapeHtml(checkError)}</p>
   </div>`;
 }
 
 function _isSberAuthProvider(selected) {
   return Boolean(selected && selected.secret_hint === "sber_auth_key");
+}
+
+function _looksLikeSberAuthKey(value) {
+  const s = String(value || "").replace(/\s/g, "");
+  if (s.length < 32) return false;
+  try {
+    const decoded = atob(s);
+    return decoded.includes(":") && decoded.length >= 8;
+  } catch {
+    return false;
+  }
 }
 
 function _encodeSberAuthorizationKey(clientId, clientSecret) {
@@ -1024,13 +1041,27 @@ function _encodeSberAuthorizationKey(clientId, clientSecret) {
   return btoa(`${id}:${secret}`);
 }
 
+function _sberSecretFilled(kind) {
+  const authKey = document.getElementById(`admin-int-${kind}-sber-auth-key`)?.value.trim();
+  const clientId = document.getElementById(`admin-int-${kind}-sber-client-id`)?.value.trim();
+  const clientSecret = document.getElementById(`admin-int-${kind}-sber-client-secret`)?.value.trim();
+  return Boolean(authKey || (clientId && clientSecret) || _looksLikeSberAuthKey(clientSecret));
+}
+
 function _readIntegrationSecret(kind, selected) {
   if (_isSberAuthProvider(selected)) {
+    const authKey = (document.getElementById(`admin-int-${kind}-sber-auth-key`)?.value || "").replace(/\s/g, "");
     const clientId = document.getElementById(`admin-int-${kind}-sber-client-id`)?.value;
-    const clientSecret = document.getElementById(`admin-int-${kind}-sber-client-secret`)?.value;
+    const clientSecret = (document.getElementById(`admin-int-${kind}-sber-client-secret`)?.value || "").replace(/\s/g, "");
+    if (authKey) {
+      return { secret: authKey };
+    }
+    if (_looksLikeSberAuthKey(clientSecret)) {
+      return { secret: clientSecret };
+    }
     const encoded = _encodeSberAuthorizationKey(clientId, clientSecret);
     if (!encoded) {
-      return { error: "Введите Client ID и Client Secret из кабинета Sber" };
+      return { error: "Вставьте авторизационный ключ из кабинета Sber — или Client ID и Client Secret" };
     }
     return { secret: encoded };
   }
@@ -1043,8 +1074,10 @@ function _readIntegrationSecret(kind, selected) {
 
 function _clearIntegrationSecretFields(kind, selected) {
   if (_isSberAuthProvider(selected)) {
+    const authKey = document.getElementById(`admin-int-${kind}-sber-auth-key`);
     const clientId = document.getElementById(`admin-int-${kind}-sber-client-id`);
     const clientSecret = document.getElementById(`admin-int-${kind}-sber-client-secret`);
+    if (authKey) authKey.value = "";
     if (clientId) clientId.value = "";
     if (clientSecret) clientSecret.value = "";
     return;
@@ -1055,11 +1088,14 @@ function _clearIntegrationSecretFields(kind, selected) {
 
 function _integrationSecretFieldsHtml(kind, selected, disabled) {
   if (_isSberAuthProvider(selected)) {
-    return `<label for="admin-int-${kind}-sber-client-id">Client ID</label>
+    return `<label for="admin-int-${kind}-sber-auth-key">Авторизационный ключ</label>
+      <input id="admin-int-${kind}-sber-auth-key" type="password" autocomplete="new-password" spellcheck="false"${disabled} />
+      <p class="hint">Скопируйте его целиком из кабинета Sber. Это уже готовая длинная строка — не Client Secret отдельно.</p>
+      <label for="admin-int-${kind}-sber-client-id">Client ID <span class="hint">(если ключа нет под рукой)</span></label>
       <input id="admin-int-${kind}-sber-client-id" type="text" autocomplete="off" spellcheck="false"${disabled} />
       <label for="admin-int-${kind}-sber-client-secret">Client Secret</label>
       <input id="admin-int-${kind}-sber-client-secret" type="password" autocomplete="new-password"${disabled} />
-      <p class="hint">Из личного кабинета Sber AI или SaluteSpeech. После записи значения не показываются.</p>`;
+      <p class="hint">После записи значения не показываются.</p>`;
   }
   return `<label for="admin-int-${kind}-secret">API-ключ</label>
     <input id="admin-int-${kind}-secret" type="password" autocomplete="new-password" value=""${disabled} />
@@ -4612,6 +4648,34 @@ function bindAdminIntegrations() {
     }
   }
 
+  function selectedProvider(kind) {
+    const providers = (state.adminIntegrations.catalog && state.adminIntegrations.catalog[kind]) || [];
+    const providerKind = document.getElementById(`admin-int-${kind}-provider`)?.value;
+    return providers.find((p) => p.provider_kind === providerKind) || providers[0];
+  }
+
+  function secretFieldsFilled(kind) {
+    const selected = selectedProvider(kind);
+    if (_isSberAuthProvider(selected)) return _sberSecretFilled(kind);
+    const input = document.getElementById(`admin-int-${kind}-secret`);
+    return Boolean(input && input.value.trim());
+  }
+
+  async function writeSecretIfFilled(kind) {
+    if (!secretFieldsFilled(kind)) return { wrote: false };
+    const selected = selectedProvider(kind);
+    const parsed = _readIntegrationSecret(kind, selected);
+    if (parsed.error) return { wrote: false, error: parsed.error };
+    await apiFetch(`/api/admin/integrations/${kind}/secret`, {
+      method: "POST",
+      session: state.session,
+      body: { secret: parsed.secret, ...expectedRevisions(kind) },
+    });
+    _clearIntegrationSecretFields(kind, selected);
+    await refreshAdminIntegrations();
+    return { wrote: true };
+  }
+
   for (const meta of ADMIN_INTEGRATION_KINDS) {
     const kind = meta.kind;
     const providerSel = document.getElementById(`admin-int-${kind}-provider`);
@@ -4686,24 +4750,18 @@ function bindAdminIntegrations() {
           setFeedback(kind, "Сначала укажите адрес API", "");
           return;
         }
-        const providers = (state.adminIntegrations.catalog && state.adminIntegrations.catalog[kind]) || [];
-        const providerKind = document.getElementById(`admin-int-${kind}-provider`)?.value;
-        const selected = providers.find((p) => p.provider_kind === providerKind) || providers[0];
-        const parsed = _readIntegrationSecret(kind, selected);
-        if (parsed.error) {
-          setFeedback(kind, parsed.error, "");
-          return;
-        }
         state.adminIntegrations.busy[kind] = true;
         setFeedback(kind, "", "");
         try {
-          await apiFetch(`/api/admin/integrations/${kind}/secret`, {
-            method: "POST",
-            session: state.session,
-            body: { secret: parsed.secret, ...expectedRevisions(kind) },
-          });
-          _clearIntegrationSecretFields(kind, selected);
-          await refreshAdminIntegrations();
+          const result = await writeSecretIfFilled(kind);
+          if (result.error) {
+            setFeedback(kind, result.error, "");
+            return;
+          }
+          if (!result.wrote) {
+            setFeedback(kind, "Введите ключ", "");
+            return;
+          }
           setFeedback(kind, "", "Ключ записан");
           render();
         } catch (ex) {
@@ -4728,8 +4786,8 @@ function bindAdminIntegrations() {
           setFeedback(kind, "Сначала укажите адрес API", "");
           return;
         }
-        const item = integrationItem(kind);
-        const rev = item.candidate || item.active;
+        let item = integrationItem(kind);
+        let rev = item.candidate || item.active;
         if (!rev) {
           setFeedback(kind, "Сначала сохраните настройки и ключ", "");
           return;
@@ -4737,6 +4795,19 @@ function bindAdminIntegrations() {
         state.adminIntegrations.busy[kind] = true;
         setFeedback(kind, "", "Проверяем…");
         try {
+          if (secretFieldsFilled(kind)) {
+            const written = await writeSecretIfFilled(kind);
+            if (written.error) {
+              setFeedback(kind, written.error, "");
+              return;
+            }
+            item = integrationItem(kind);
+            rev = item.candidate || item.active;
+          }
+          if (!rev) {
+            setFeedback(kind, "Сначала сохраните настройки и ключ", "");
+            return;
+          }
           const result = await apiFetch(`/api/admin/integrations/${kind}/test`, {
             method: "POST",
             session: state.session,
