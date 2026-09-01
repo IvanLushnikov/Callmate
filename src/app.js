@@ -951,7 +951,7 @@ const INTEGRATION_ERROR_MESSAGES = {
   auth_failed: "Sber не принял ключ. Нужен авторизационный ключ из кабинета, не Client Secret отдельно",
   check_failed: "Проверка не прошла",
   provider_unavailable: "Сервис недоступен, попробуйте позже",
-  secret_not_configured: "Ключ ещё не записан. Вставьте авторизационный ключ и нажмите «Записать ключ»",
+  secret_not_configured: "Ключ ещё не записан — вставьте его и нажмите «Сохранить и включить»",
 };
 
 function integrationErrorMessage(code) {
@@ -1099,7 +1099,7 @@ function _integrationSecretFieldsHtml(kind, selected, disabled) {
   }
   return `<label for="admin-int-${kind}-secret">API-ключ</label>
     <input id="admin-int-${kind}-secret" type="password" autocomplete="new-password" value=""${disabled} />
-    <p class="hint">Ключ сохраняется только при записи. Просмотреть нельзя.</p>`;
+    <p class="hint">Оставьте пустым, если ключ уже задан. После сохранения значение не показывается.</p>`;
 }
 
 function _integrationCardHtml(meta, ai) {
@@ -1141,30 +1141,25 @@ function _integrationCardHtml(meta, ai) {
       ? `<label for="admin-int-${kind}-model">${escapeHtml(optionLabel)}</label>
       <select id="admin-int-${kind}-model"${disabled}>${optionOpts}</select>`
       : "";
-  const metaFormId = `admin-int-${kind}-meta-form`;
-  const secretFormId = `admin-int-${kind}-secret-form`;
+  const formId = `admin-int-${kind}-form`;
   return `<article class="panel integration-card" data-integration-kind="${escapeHtml(kind)}">
     <div class="integration-card-body">
       <h3>${escapeHtml(meta.title)}</h3>
       <p class="hint">${escapeHtml(meta.hint)}</p>
       ${_integrationSliceHtml("Активная", item.active)}
       ${item.candidate ? _integrationSliceHtml("Черновик", item.candidate) : ""}
-      <form class="integration-meta-form" id="${metaFormId}">
+      <form class="integration-form" id="${formId}">
         <label for="admin-int-${kind}-provider">Провайдер</label>
         <select id="admin-int-${kind}-provider"${disabled}>${providerOpts || '<option value="">Нет вариантов</option>'}</select>
         ${modelField}
         ${folderField}
-      </form>
-      <form class="integration-secret-form" id="${secretFormId}">
         ${_integrationSecretFieldsHtml(kind, selected, disabled)}
       </form>
       <div class="error admin-int-error" id="admin-int-${kind}-error" ${fb.error ? "" : "hidden"}>${escapeHtml(fb.error || "")}</div>
       <p class="hint ok-line admin-int-ok" id="admin-int-${kind}-ok" ${fb.ok ? "" : "hidden"}>${escapeHtml(fb.ok || "")}</p>
     </div>
-    <div class="integration-card-actions row-actions">
-      <button class="btn secondary" type="submit" form="${metaFormId}"${disabled}>Сохранить настройки</button>
-      <button class="btn secondary" type="submit" form="${secretFormId}"${disabled}>Записать ключ</button>
-      <button class="btn" type="button" id="admin-int-${kind}-test"${disabled}>Проверить и включить</button>
+    <div class="integration-card-actions">
+      <button class="btn" type="submit" form="${formId}" id="admin-int-${kind}-save"${disabled}>Сохранить и включить</button>
     </div>
   </article>`;
 }
@@ -4676,6 +4671,81 @@ function bindAdminIntegrations() {
     return { wrote: true };
   }
 
+  async function saveIntegrationMetadata(kind) {
+    const body = {
+      provider_kind: document.getElementById(`admin-int-${kind}-provider`).value,
+      enabled: true,
+      runtime_mode: "live",
+      ...expectedRevisions(kind),
+    };
+    const modelEl = document.getElementById(`admin-int-${kind}-model`);
+    if (modelEl) body.model = modelEl.value;
+    const folderEl = document.getElementById(`admin-int-${kind}-folder`);
+    if (folderEl && folderEl.value.trim()) body.folder_id = folderEl.value.trim();
+    await apiFetch(`/api/admin/integrations/${kind}`, {
+      method: "PUT",
+      session: state.session,
+      body,
+    });
+    await refreshAdminIntegrations();
+  }
+
+  function currentRevision(kind) {
+    const item = integrationItem(kind);
+    return item.candidate || item.active || null;
+  }
+
+  async function saveAndActivateIntegration(kind) {
+    if (!hasApi()) {
+      setFeedback(kind, "Сначала укажите адрес API", "");
+      return;
+    }
+    state.adminIntegrations.busy[kind] = true;
+    setFeedback(kind, "", "Сохраняем и проверяем…");
+    try {
+      await saveIntegrationMetadata(kind);
+      if (secretFieldsFilled(kind)) {
+        const written = await writeSecretIfFilled(kind);
+        if (written.error) {
+          setFeedback(kind, written.error, "");
+          return;
+        }
+      }
+      const rev = currentRevision(kind);
+      if (!rev) {
+        setFeedback(kind, "Не удалось сохранить настройки", "");
+        return;
+      }
+      if (!rev.has_secret && !secretFieldsFilled(kind)) {
+        setFeedback(kind, "Введите ключ", "");
+        return;
+      }
+      const result = await apiFetch(`/api/admin/integrations/${kind}/test`, {
+        method: "POST",
+        session: state.session,
+        body: { revision_no: rev.revision_no, activate_on_success: true },
+      });
+      await refreshAdminIntegrations();
+      if (result.status === "passed") {
+        setFeedback(kind, "", "Подключение проверено, конфигурация активна");
+      } else {
+        setFeedback(kind, integrationErrorMessage(result.error_code) || "Проверка не прошла", "");
+      }
+      render();
+    } catch (ex) {
+      const code = ex?.code;
+      setFeedback(
+        kind,
+        code === "revision_conflict"
+          ? "Данные устарели — обновите страницу и повторите"
+          : integrationErrorMessage(code),
+        ""
+      );
+    } finally {
+      state.adminIntegrations.busy[kind] = false;
+    }
+  }
+
   for (const meta of ADMIN_INTEGRATION_KINDS) {
     const kind = meta.kind;
     const providerSel = document.getElementById(`admin-int-${kind}-provider`);
@@ -4698,140 +4768,11 @@ function bindAdminIntegrations() {
       };
     }
 
-    const metaForm = document.getElementById(`admin-int-${kind}-meta-form`);
-    if (metaForm) {
-      metaForm.onsubmit = async (e) => {
+    const form = document.getElementById(`admin-int-${kind}-form`);
+    if (form) {
+      form.onsubmit = async (e) => {
         e.preventDefault();
-        if (!hasApi()) {
-          setFeedback(kind, "Сначала укажите адрес API", "");
-          return;
-        }
-        state.adminIntegrations.busy[kind] = true;
-        setFeedback(kind, "", "");
-        try {
-          const body = {
-            provider_kind: document.getElementById(`admin-int-${kind}-provider`).value,
-            enabled: true,
-            runtime_mode: "live",
-            ...expectedRevisions(kind),
-          };
-          const modelEl = document.getElementById(`admin-int-${kind}-model`);
-          if (modelEl) body.model = modelEl.value;
-          const folderEl = document.getElementById(`admin-int-${kind}-folder`);
-          if (folderEl && folderEl.value.trim()) body.folder_id = folderEl.value.trim();
-          await apiFetch(`/api/admin/integrations/${kind}`, {
-            method: "PUT",
-            session: state.session,
-            body,
-          });
-          await refreshAdminIntegrations();
-          setFeedback(kind, "", "Настройки сохранены");
-          render();
-        } catch (ex) {
-          const code = ex?.code;
-          setFeedback(
-            kind,
-            code === "revision_conflict"
-              ? "Данные устарели — обновите страницу и повторите"
-              : integrationErrorMessage(code),
-            ""
-          );
-        } finally {
-          state.adminIntegrations.busy[kind] = false;
-        }
-      };
-    }
-
-    const secretForm = document.getElementById(`admin-int-${kind}-secret-form`);
-    if (secretForm) {
-      secretForm.onsubmit = async (e) => {
-        e.preventDefault();
-        if (!hasApi()) {
-          setFeedback(kind, "Сначала укажите адрес API", "");
-          return;
-        }
-        state.adminIntegrations.busy[kind] = true;
-        setFeedback(kind, "", "");
-        try {
-          const result = await writeSecretIfFilled(kind);
-          if (result.error) {
-            setFeedback(kind, result.error, "");
-            return;
-          }
-          if (!result.wrote) {
-            setFeedback(kind, "Введите ключ", "");
-            return;
-          }
-          setFeedback(kind, "", "Ключ записан");
-          render();
-        } catch (ex) {
-          const code = ex?.code;
-          setFeedback(
-            kind,
-            code === "revision_conflict"
-              ? "Данные устарели — обновите страницу и повторите"
-              : integrationErrorMessage(code),
-            ""
-          );
-        } finally {
-          state.adminIntegrations.busy[kind] = false;
-        }
-      };
-    }
-
-    const testBtn = document.getElementById(`admin-int-${kind}-test`);
-    if (testBtn) {
-      testBtn.onclick = async () => {
-        if (!hasApi()) {
-          setFeedback(kind, "Сначала укажите адрес API", "");
-          return;
-        }
-        let item = integrationItem(kind);
-        let rev = item.candidate || item.active;
-        if (!rev) {
-          setFeedback(kind, "Сначала сохраните настройки и ключ", "");
-          return;
-        }
-        state.adminIntegrations.busy[kind] = true;
-        setFeedback(kind, "", "Проверяем…");
-        try {
-          if (secretFieldsFilled(kind)) {
-            const written = await writeSecretIfFilled(kind);
-            if (written.error) {
-              setFeedback(kind, written.error, "");
-              return;
-            }
-            item = integrationItem(kind);
-            rev = item.candidate || item.active;
-          }
-          if (!rev) {
-            setFeedback(kind, "Сначала сохраните настройки и ключ", "");
-            return;
-          }
-          const result = await apiFetch(`/api/admin/integrations/${kind}/test`, {
-            method: "POST",
-            session: state.session,
-            body: { revision_no: rev.revision_no, activate_on_success: true },
-          });
-          await refreshAdminIntegrations();
-          if (result.status === "passed") {
-            setFeedback(kind, "", "Подключение проверено, конфигурация активна");
-          } else {
-            setFeedback(kind, integrationErrorMessage(result.error_code) || "Проверка не прошла", "");
-          }
-          render();
-        } catch (ex) {
-          const code = ex?.code;
-          setFeedback(
-            kind,
-            code === "revision_conflict"
-              ? "Данные устарели — обновите страницу и повторите"
-              : integrationErrorMessage(code),
-            ""
-          );
-        } finally {
-          state.adminIntegrations.busy[kind] = false;
-        }
+        await saveAndActivateIntegration(kind);
       };
     }
   }
