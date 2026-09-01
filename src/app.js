@@ -957,6 +957,8 @@ function integrationErrorMessage(code) {
   if (INTEGRATION_ERROR_MESSAGES[code]) return INTEGRATION_ERROR_MESSAGES[code];
   return errorMessage(code);
 }
+
+const ADMIN_INTEGRATION_KINDS = [
   {
     kind: "llm_campaign",
     title: "LLM для кампаний",
