@@ -7,6 +7,11 @@ export const API_BASE =
 export const ERROR_MESSAGES = {
   invalid_credentials: "Неверный логин или пароль",
   auth_failed: "Неверный логин или пароль",
+  invalid_totp: "Неверный код. Проверьте приложение и попробуйте снова",
+  invalid_pending_token: "Время входа истекло. Войдите снова",
+  totp_rate_limited: "Слишком много попыток. Подождите и войдите заново",
+  totp_setup_expired: "Настройка истекла. Начните подключение заново",
+  totp_already_enabled: "Двухфакторная аутентификация уже подключена",
   rate_limited: "Слишком много попыток. Подождите немного",
   invalid_session: "Сессия устарела. Войдите снова",
   forbidden: "Нет доступа",
@@ -118,6 +123,30 @@ export async function login(loginName, password) {
           ? "server"
           : code;
     throw apiError(mapped, { details, status: res.status });
+  }
+  return res.json();
+}
+
+export async function verifyTotpLogin({ pendingToken, code, recoveryCode }) {
+  if (!API_BASE) {
+    throw apiError("api_not_configured");
+  }
+  const body = { pending_token: pendingToken };
+  if (code) body.code = code;
+  if (recoveryCode) body.recovery_code = recoveryCode;
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/api/auth/totp/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw apiError("request_failed");
+  }
+  if (!res.ok) {
+    const { code: errCode, details } = await readErrorBody(res);
+    throw apiError(errCode, { details, status: res.status });
   }
   return res.json();
 }
