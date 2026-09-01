@@ -550,6 +550,29 @@ function statusLabel(code) {
   return STATUS_LABEL[code] || code || "—";
 }
 
+function contactCountLabel(n) {
+  const abs = Math.abs(Number(n)) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return "контактов";
+  if (last === 1) return "контакт";
+  if (last >= 2 && last <= 4) return "контакта";
+  return "контактов";
+}
+
+/** Contact pipeline status → badge tone (DESIGN-062). */
+function contactStatusTone(code) {
+  if (code === STATUS.done) return "ok";
+  if (code === STATUS.in_progress) return "warn";
+  if (code === STATUS.no_answer || code === STATUS.cancel) return "muted";
+  return "muted";
+}
+
+function contactStatusBadgeHtml(code) {
+  const label = statusLabel(code);
+  const tone = contactStatusTone(code);
+  return `<span class="status-badge status-badge--${tone} status-badge--compact" data-testid="contact-status-badge" aria-label="Статус контакта: ${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+}
+
 function isStarted(camp) {
   return camp && camp.dial_state && camp.dial_state !== "draft";
 }
@@ -1248,7 +1271,7 @@ function pageCampaignList() {
           ${createBtn}
         </div>
       </div>`,
-      { id: "sec-campaign", className: "desk-page-empty campaigns-list-page" }
+      { id: "sec-campaign", className: "desk-page-empty campaigns-list-page", testId: "campaigns-page" }
     );
   }
 
@@ -1266,7 +1289,7 @@ function pageCampaignList() {
       const progressHint =
         c.dial_state === "running" || c.dial_state === "paused"
           ? `В очереди ${prog.inQueue} · дозвон ${prog.done}`
-          : `${(c.contacts || []).length} контактов`;
+          : `${(c.contacts || []).length} ${contactCountLabel((c.contacts || []).length)}`;
       return `<tr class="camp-row" data-href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">
         <td><a class="camp-name" href="#/cabinet/campaigns/${encodeURIComponent(c.id)}">${escapeHtml(c.name || "Без названия")}</a></td>
         <td>${statusBadgeHtml(c, { compact: true })}</td>
@@ -1286,12 +1309,12 @@ function pageCampaignList() {
           ${statusBadgeHtml(c, { compact: true })}
         </div>
         <p class="hint camp-card-next">${escapeHtml(next.label)}</p>
-        <p class="hint camp-card-meta">${(c.contacts || []).length} контактов</p>
+        <p class="hint camp-card-meta">${(c.contacts || []).length} ${contactCountLabel((c.contacts || []).length)}</p>
       </a>`;
     })
     .join("");
 
-  return `${deskPageHeadRow("Кампании", "От цели до обзвона — в одном месте", createBtn, { id: "sec-campaign" })}
+  return `${deskPageHeadRow("Кампании", "От цели до обзвона — в одном месте", createBtn, { id: "sec-campaign", testId: "campaigns-page" })}
     <div class="desk-page-body">
       ${statRow}
       ${telephonyOnboardingBlock()}
@@ -1413,7 +1436,11 @@ function pageTariffs() {
       <p class="hint">В кабинете оплаты пока нет — пополнение через поддержку CallMate.</p>
       <a class="btn" href="mailto:support@callmate.ru?subject=Пополнение%20баланса">Связаться для пополнения</a>
     </div>`;
-  return deskPage("Биллинг", "Баланс, тариф и пакеты минут", body, { id: "sec-tariffs" });
+  return deskPage("Биллинг", "Баланс, тариф и пакеты минут", body, {
+    id: "sec-tariffs",
+    className: "tariffs-page",
+    testId: "tariffs-page",
+  });
 }
 
 async function refreshCabinetMe() {
@@ -1762,8 +1789,9 @@ function scenarioStatusBanner(camp, { weak, started, pending, genErr, hasServerP
   return "";
 }
 
-function deskPage(title, lead, bodyHtml, { id = "", backHref = "", backLabel = "← Назад", className = "" } = {}) {
-  return `<section class="desk-page${className ? ` ${escapeHtml(className)}` : ""}"${id ? ` id="${escapeHtml(id)}"` : ""}>
+function deskPage(title, lead, bodyHtml, { id = "", backHref = "", backLabel = "← Назад", className = "", testId = "" } = {}) {
+  const testAttr = testId ? ` data-testid="${escapeHtml(testId)}"` : "";
+  return `<section class="desk-page${className ? ` ${escapeHtml(className)}` : ""}"${id ? ` id="${escapeHtml(id)}"` : ""}${testAttr}>
     ${backHref ? `<a class="back-link quiet" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a>` : ""}
     <header class="desk-page-head">
       <h2 class="desk-page-title">${escapeHtml(title)}</h2>
@@ -1773,8 +1801,9 @@ function deskPage(title, lead, bodyHtml, { id = "", backHref = "", backLabel = "
   </section>`;
 }
 
-function deskPageHeadRow(title, lead, actionsHtml, { id = "" } = {}) {
-  return `<section class="desk-page campaigns-list-page"${id ? ` id="${escapeHtml(id)}"` : ""}>
+function deskPageHeadRow(title, lead, actionsHtml, { id = "", testId = "" } = {}) {
+  const testAttr = testId ? ` data-testid="${escapeHtml(testId)}"` : "";
+  return `<section class="desk-page campaigns-list-page"${id ? ` id="${escapeHtml(id)}"` : ""}${testAttr}>
     <header class="desk-page-head desk-page-head-row">
       <div class="desk-page-head-copy">
         <h2 class="desk-page-title">${escapeHtml(title)}</h2>
@@ -1797,7 +1826,7 @@ function deskStatCard(label, valueHtml, hint = "", { tone = "" } = {}) {
 }
 
 function workspaceTabsHtml(activeTab) {
-  return `<nav class="workspace-tabs" aria-label="Разделы кампании">
+  return `<nav class="workspace-tabs" aria-label="Разделы кампании" data-testid="workspace-tabs">
     ${WORKSPACE_TABS.map(
       (t) =>
         `<button type="button" class="workspace-tab${t.id === activeTab ? " active" : ""}" data-workspace-tab="${t.id}" aria-selected="${t.id === activeTab ? "true" : "false"}">${escapeHtml(t.label)}</button>`
@@ -2794,11 +2823,11 @@ function sectionContacts(camp) {
     { id: "no_answer", label: STATUS_LABEL[STATUS.no_answer] },
     { id: "cancel", label: STATUS_LABEL[STATUS.cancel] },
   ];
-  const filters = `<div class="status-filters" role="tablist" aria-label="Статус">
+  const filters = `<div class="status-filters" role="tablist" aria-label="Статус" data-testid="contact-status-filters">
       ${filterKeys
         .map(
           (f) =>
-            `<button type="button" class="status-filter${filter === f.id ? " active" : ""}" data-contact-filter="${f.id}">${escapeHtml(f.label)}</button>`
+            `<button type="button" class="status-filter${filter === f.id ? " active" : ""}" data-contact-filter="${f.id}" role="tab" aria-selected="${filter === f.id ? "true" : "false"}">${escapeHtml(f.label)}</button>`
         )
         .join("")}
     </div>`;
@@ -2806,7 +2835,7 @@ function sectionContacts(camp) {
       <span class="filter-label">Исход попытки</span>
       ${OUTCOME_FILTERS.map(
         (f) =>
-          `<button type="button" class="status-filter${outcomeFilter === f.id ? " active" : ""}" data-outcome-filter="${f.id}">${escapeHtml(f.label)}</button>`
+          `<button type="button" class="status-filter${outcomeFilter === f.id ? " active" : ""}" data-outcome-filter="${f.id}" role="tab" aria-selected="${outcomeFilter === f.id ? "true" : "false"}">${escapeHtml(f.label)}</button>`
       ).join("")}
     </div>`;
   const emptyOutcome =
@@ -2821,7 +2850,7 @@ function sectionContacts(camp) {
           return `<tr>
               <td><input type="checkbox" class="contact-check" data-phone="${escapeHtml(r.phone)}" data-id="${escapeHtml(r.id || "")}" ${roAttr()} /></td>
               <td><button type="button" class="linkish" data-expand-status="${escapeHtml(key)}">${escapeHtml(maskPhone(r.phone))}</button></td>
-              <td>${escapeHtml(statusLabel(r.status))}</td>
+              <td>${contactStatusBadgeHtml(r.status)}</td>
               <td>${escapeHtml(r.name || "")}</td>
             </tr>
             ${open ? `<tr class="expand-row"><td colspan="4">${contactDrawerHtml(camp, r)}</td></tr>` : ""}`;
@@ -2885,7 +2914,7 @@ function sectionContacts(camp) {
       </div>`
     : "";
 
-  return `<section class="flow-section workspace-panel contacts-sheet" id="sec-contacts">
+  return `<section class="flow-section workspace-panel contacts-sheet" id="sec-contacts" data-testid="contacts-panel">
     <h2 class="contacts-sheet-title">Номера</h2>
     <div class="contacts-panel contacts-sheet-body">
       ${reloadHint}
@@ -3314,7 +3343,7 @@ function loginView() {
     ? `<p class="hint">В кабинет компании или в админку</p>`
     : `<p class="hint">Сначала укажите адрес API — сейчас только проверка вёрстки</p>`;
   return `<div class="login-wrap login-wrap-center">
-    <form class="login-panel" id="login-form">
+    <form class="login-panel" id="login-form" data-testid="login-panel">
       <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
       <h1 class="login-panel-title">Вход</h1>
       ${apiHint}
