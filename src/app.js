@@ -108,6 +108,16 @@ function saveJson(key, value, store = localStorage) {
   store.setItem(key, JSON.stringify(value));
 }
 
+/** Drop stale cabinet cache when API is authoritative (wire-up audit gaps 3–5). */
+function purgeServerBackedLocalCache() {
+  if (!hasApi()) return;
+  localStorage.removeItem("scx_campaigns");
+  localStorage.removeItem("scx_co_balance");
+  localStorage.removeItem("scx_co_tariff");
+}
+
+if (hasApi()) purgeServerBackedLocalCache();
+
 /** Session bearer is a secret (ARCH-108): sessionStorage only, never localStorage. */
 function readSessionToken() {
   try {
@@ -184,6 +194,7 @@ const state = {
     runtimeLoaded: false,
     cabinetMeLoaded: false,
     campaignsLoaded: false,
+    campaignsLoading: false,
     analyticsLoaded: false,
     gateErrors: [],
     statusExpandKey: null,
@@ -440,7 +451,11 @@ function launchChecklist(camp) {
   const telOk = state.telephony.status === "ok" && !state.telephony.checking;
   const schOk = scheduleIsSet(camp);
   const contactsOk = Boolean(camp?.contacts?.length);
-  const balanceOk = state.companyBalance > 0 || state.impersonate;
+  const balanceOk =
+    state.impersonate ||
+    (hasApi()
+      ? state.ui.cabinetMeLoaded && state.companyBalance != null && state.companyBalance > 0
+      : state.companyBalance > 0);
   return [
     {
       id: "goal",
@@ -1866,19 +1881,30 @@ function emptyCampaign(partial = {}) {
 }
 
 function mapCampaignFromApi(c, existing = {}) {
-  const schedule =
+  const scheduleFromApi =
     c.schedule && (c.schedule.days || c.schedule.from || c.schedule.tz)
       ? {
-          days: c.schedule.days || existing.schedule?.days || ["mon", "tue", "wed", "thu", "fri"],
-          from: c.schedule.from || c.schedule.start_hour || existing.schedule?.from || "10:00",
-          to: c.schedule.to || c.schedule.end_hour || existing.schedule?.to || "18:00",
-          tz: c.schedule.tz || c.schedule.region || existing.schedule?.tz || "Europe/Moscow",
+          days: c.schedule.days || ["mon", "tue", "wed", "thu", "fri"],
+          from: c.schedule.from || c.schedule.start_hour || "10:00",
+          to: c.schedule.to || c.schedule.end_hour || "18:00",
+          tz: c.schedule.tz || c.schedule.region || "Europe/Moscow",
         }
-      : existing.schedule || emptyCampaign().schedule;
+      : null;
+  const schedule = hasApi()
+    ? scheduleFromApi || emptyCampaign().schedule
+    : scheduleFromApi ||
+      (existing.schedule && (existing.schedule.days || existing.schedule.from || existing.schedule.tz)
+        ? {
+            days: existing.schedule.days || ["mon", "tue", "wed", "thu", "fri"],
+            from: existing.schedule.from || "10:00",
+            to: existing.schedule.to || "18:00",
+            tz: existing.schedule.tz || "Europe/Moscow",
+          }
+        : emptyCampaign().schedule);
   if (hasApi()) {
     return emptyCampaign({
       id: c.id,
-      name: existing.name || (c.goal || "").slice(0, 48),
+      name: (c.goal || "").slice(0, 48) || existing.name || "",
       goal: c.goal || "",
       details: c.details || "",
       dial_state: c.dial_state || "draft",
@@ -1930,6 +1956,7 @@ function mapCampaignFromApi(c, existing = {}) {
 
 function mapPreviewFromApi(fromApi, existing) {
   if (hasApi()) {
+    // Server-authoritative: never merge stale preview from existing/localStorage.
     if (!fromApi || typeof fromApi !== "object") {
       return { greeting: "", says: "", replies: "", tone: "" };
     }
@@ -1976,18 +2003,21 @@ function isGenerateErrorCode(code) {
 
 async function refreshCampaigns() {
   if (!hasApi()) return;
-  const data = await apiFetch("/api/cabinet/campaigns", { session: state.session });
-  const byId = Object.fromEntries(state.campaigns.map((c) => [String(c.id), c]));
-  state.campaigns = (data?.items || []).map((item) => {
-    const prev = byId[String(item.id)] || {};
-    return mapCampaignFromApi(item, {
-      name: prev.name,
-      contacts: prev.contacts,
-      columns: prev.columns,
+  state.ui.campaignsLoading = true;
+  try {
+    const data = await apiFetch("/api/cabinet/campaigns", { session: state.session });
+    const byId = Object.fromEntries(state.campaigns.map((c) => [String(c.id), c]));
+    state.campaigns = (data?.items || []).map((item) => {
+      const prev = byId[String(item.id)] || {};
+      return mapCampaignFromApi(item, {
+        contacts: prev.contacts || [],
+        columns: prev.columns || [],
+      });
     });
-  });
-  state.ui.campaignsLoaded = true;
-  persistCampaigns();
+    state.ui.campaignsLoaded = true;
+  } finally {
+    state.ui.campaignsLoading = false;
+  }
 }
 
 function mapAnalyticsSummary(summary) {
@@ -2142,6 +2172,15 @@ function pageCampaignList() {
        <p class="hint">Аккаунт заблокирован</p>`
     : `<a class="btn" href="#/cabinet/campaigns/new">Создать кампанию</a>`;
 
+  if (hasApi() && !state.ui.campaignsLoaded) {
+    return deskPage(
+      "Кампании",
+      "От цели до обзвона — в одном месте",
+      `<p class="hint">Загружаем кампании…</p>`,
+      { id: "sec-campaign", className: "desk-page-empty campaigns-list-page", testId: "campaigns-page" }
+    );
+  }
+
   if (!state.campaigns.length) {
     return deskPage(
       "Кампании",
@@ -2255,7 +2294,7 @@ function pageAccount() {
       <a class="desk-link-card" href="#/cabinet/tariffs">
         <span class="desk-link-kicker">Биллинг</span>
         <strong class="desk-link-title">Баланс и тариф</strong>
-        <span class="hint">${escapeHtml(String(state.companyBalance))} ₽ · ${escapeHtml(String(state.companyTariff))} ₽/мин</span>
+        <span class="hint">${hasApi() && !state.ui.cabinetMeLoaded ? "Загружаем…" : `${escapeHtml(state.companyBalance == null ? "—" : String(state.companyBalance))} ₽ · ${escapeHtml(state.companyTariff == null || state.companyTariff <= 0 ? "—" : String(state.companyTariff))} ₽/мин`}</span>
       </a>
       <a class="desk-link-card" href="#/cabinet/integrations">
         <span class="desk-link-kicker">Интеграции</span>
@@ -2279,9 +2318,16 @@ const TARIFF_PACKAGES = [
 ];
 
 function pageTariffs() {
-  const bal = Number(state.companyBalance) || 0;
-  const tariff = Number(state.companyTariff) || 0;
-  const approx = tariff > 0 ? Math.floor(bal / tariff) : null;
+  if (hasApi() && !state.ui.cabinetMeLoaded) {
+    return deskPage("Биллинг", "Баланс, тариф и пакеты минут", `<p class="hint">Загружаем баланс…</p>`, {
+      id: "sec-tariffs",
+      className: "tariffs-page",
+      testId: "tariffs-page",
+    });
+  }
+  const bal = state.companyBalance != null ? Number(state.companyBalance) : null;
+  const tariff = state.companyTariff != null && Number(state.companyTariff) > 0 ? Number(state.companyTariff) : null;
+  const approx = bal != null && tariff != null ? Math.floor(bal / tariff) : null;
   const rows = TARIFF_PACKAGES.map((p) => {
     const current = tariff > 0 && Number(tariff) === p.price;
     return `<tr class="${current ? "tariff-row-current" : ""}">
@@ -2291,11 +2337,11 @@ function pageTariffs() {
     </tr>`;
   }).join("");
   const body = `<div class="desk-stat-row desk-stat-row-3">
-      ${deskStatCard("Баланс", `${escapeHtml(String(bal))} ₽`)}
+      ${deskStatCard("Баланс", bal != null ? `${escapeHtml(String(bal))} ₽` : "—")}
       ${deskStatCard(
         "Тариф",
-        tariff > 0 ? `${escapeHtml(String(tariff))} ₽/мин` : "Не задан",
-        tariff > 0 ? "За минуту разговора" : "Попросите поддержку назначить тариф"
+        tariff != null ? `${escapeHtml(String(tariff))} ₽/мин` : "Не задан",
+        tariff != null ? "За минуту разговора" : "Попросите поддержку назначить тариф"
       )}
       ${deskStatCard(
         "Хватит примерно",
@@ -3465,6 +3511,25 @@ function archetypeCardsHtml(selectedId, { locked = false, name = "archetype-pick
   </div>`;
 }
 
+function readPreviewFromDom() {
+  return {
+    greeting: document.getElementById("preview-greeting")?.value.trim() ?? "",
+    says: document.getElementById("preview-says")?.value.trim() ?? "",
+    replies: document.getElementById("preview-replies")?.value.trim() ?? "",
+    tone: document.getElementById("preview-tone")?.value.trim() ?? "",
+  };
+}
+
+function applyScenarioResponse(camp, data) {
+  if (!data || typeof data !== "object") return;
+  if (data.scenario_text != null) camp.scenarioText = data.scenario_text;
+  if (Array.isArray(data.stages)) camp.stages = data.stages;
+  if (Array.isArray(data.verdicts)) camp.verdicts = data.verdicts;
+  if (data.preview && typeof data.preview === "object") {
+    camp.preview = mapPreviewFromApi(data.preview, null);
+  }
+}
+
 function readKnowledgePackFromDom(archetype) {
   const pack = {};
   const lines = (id) =>
@@ -4547,9 +4612,9 @@ function render() {
     if (
       hasApi() &&
       !state.ui.campaignsLoaded &&
+      !state.ui.campaignsLoading &&
       (cabinet.tab === "campaigns" || cabinet.page === "workspace")
     ) {
-      state.ui.campaignsLoaded = true;
       void refreshCampaigns()
         .then(async () => {
           const camp = workspaceCampaign() || activeCampaign();
@@ -6057,13 +6122,14 @@ function hasAssembledScenario(camp) {
   return hasPreview || hasStages || hasScenario;
 }
 
-async function performPreviewSave(camp, { name, goal, details, archetype, archetype_locked, knowledge_pack }) {
+async function performPreviewSave(camp, { name, goal, details, archetype, archetype_locked, knowledge_pack, preview }) {
   camp.name = name;
   camp.goal = goal;
   camp.details = details;
   if (archetype !== undefined) camp.archetype = archetype;
   if (archetype_locked !== undefined) camp.archetype_locked = archetype_locked;
   if (knowledge_pack !== undefined) camp.knowledge_pack = knowledge_pack;
+  if (preview !== undefined) camp.preview = preview;
   state.ui.generateError = null;
   const blockMsg = clientPackGapsBlock(camp.archetype, camp.knowledge_pack);
   if (blockMsg) {
@@ -6077,6 +6143,15 @@ async function performPreviewSave(camp, { name, goal, details, archetype, archet
       state.ui.generatePending = true;
       render();
       const body = { goal, details, knowledge_pack: camp.knowledge_pack || {} };
+      const previewBlocks = preview ?? readPreviewFromDom();
+      if (
+        previewBlocks.greeting ||
+        previewBlocks.says ||
+        previewBlocks.replies ||
+        previewBlocks.tone
+      ) {
+        body.preview = previewBlocks;
+      }
       if (camp.archetype_locked && camp.archetype) {
         body.archetype = camp.archetype;
         body.archetype_locked = true;
@@ -6163,7 +6238,7 @@ function bindCampaignForms() {
         flash("Допишите сведения", "error");
         return;
       }
-      const payload = { name, goal, details, archetype, archetype_locked, knowledge_pack };
+      const payload = { name, goal, details, archetype, archetype_locked, knowledge_pack, preview: readPreviewFromDom() };
       if (hasAssembledScenario(camp)) {
         state.ui.pendingPreviewSave = payload;
         state.ui.saveRebuildOpen = true;
@@ -6331,15 +6406,15 @@ function bindCampaignForms() {
       };
       try {
         if (hasApi()) {
-          await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
+          const updated = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
             method: "PUT",
             session: state.session,
             body: {
               scenario_text: camp.scenarioText,
               stages: camp.stages || [],
-              verdicts: camp.verdicts || [],
             },
           });
+          applyScenarioResponse(camp, updated);
         }
         persistCampaigns();
         document.getElementById("scenario-ok").hidden = false;
@@ -6376,15 +6451,15 @@ function bindCampaignForms() {
         };
         try {
           if (hasApi()) {
-            await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
+            const updated = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
               method: "PUT",
               session: state.session,
               body: {
                 scenario_text: camp.scenarioText || "",
                 stages: camp.stages,
-                verdicts: camp.verdicts || [],
               },
             });
+            applyScenarioResponse(camp, updated);
           }
           persistCampaigns();
           flash("Черновик сохранён");
@@ -7763,6 +7838,15 @@ function applySessionPayload(data) {
   state.session = data.session || state.session;
   state.role = data.role || "";
   state.companyLocked = Boolean(data.company_locked);
+  if (hasApi() && data.role !== "superadmin") {
+    purgeServerBackedLocalCache();
+    state.campaigns = [];
+    state.companyBalance = null;
+    state.companyTariff = null;
+    state.ui.campaignsLoaded = false;
+    state.ui.campaignsLoading = false;
+    state.ui.cabinetMeLoaded = false;
+  }
   if (data.impersonated_company_id) {
     state.impersonate = { companyId: data.impersonated_company_id };
     saveJson("scx_impersonate", state.impersonate, sessionStorage);
@@ -7797,6 +7881,7 @@ function clearSession() {
   state.ui.telephonyLoaded = false;
   state.ui.runtimeLoaded = false;
   state.ui.campaignsLoaded = false;
+  state.ui.campaignsLoading = false;
   state.ui.analyticsLoaded = false;
   state.ui.cabinetMeLoaded = false;
   state.runtime = null;
