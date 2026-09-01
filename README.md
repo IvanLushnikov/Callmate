@@ -25,6 +25,6 @@ cd /Users/ivanlusnikov/Scorix
 python3 scripts/dev-server.py 8765
 ```
 
-Откройте `http://127.0.0.1:8765/`. Dev-сервер проксирует `/api/*` на `scorix-api.onrender.com` — иначе с localhost вход блокирует CORS.
+Откройте `http://127.0.0.1:8765/`. Dev-сервер проксирует `/api/*` на `callmate-api.onrender.com` — иначе с localhost вход блокирует CORS.
 
 Обычный `python3 -m http.server` — только для stub-режима без API (уберите `SCORIX_API_BASE` в `index.html`).
