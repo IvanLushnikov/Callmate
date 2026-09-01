@@ -1013,6 +1013,59 @@ function _integrationSliceHtml(title, slice) {
   </div>`;
 }
 
+function _isSberAuthProvider(selected) {
+  return Boolean(selected && selected.secret_hint === "sber_auth_key");
+}
+
+function _encodeSberAuthorizationKey(clientId, clientSecret) {
+  const id = String(clientId || "").trim();
+  const secret = String(clientSecret || "").trim();
+  if (!id || !secret) return null;
+  return btoa(`${id}:${secret}`);
+}
+
+function _readIntegrationSecret(kind, selected) {
+  if (_isSberAuthProvider(selected)) {
+    const clientId = document.getElementById(`admin-int-${kind}-sber-client-id`)?.value;
+    const clientSecret = document.getElementById(`admin-int-${kind}-sber-client-secret`)?.value;
+    const encoded = _encodeSberAuthorizationKey(clientId, clientSecret);
+    if (!encoded) {
+      return { error: "Введите Client ID и Client Secret из кабинета Sber" };
+    }
+    return { secret: encoded };
+  }
+  const secret = document.getElementById(`admin-int-${kind}-secret`)?.value || "";
+  if (!secret.trim()) {
+    return { error: "Введите API-ключ" };
+  }
+  return { secret: secret.trim() };
+}
+
+function _clearIntegrationSecretFields(kind, selected) {
+  if (_isSberAuthProvider(selected)) {
+    const clientId = document.getElementById(`admin-int-${kind}-sber-client-id`);
+    const clientSecret = document.getElementById(`admin-int-${kind}-sber-client-secret`);
+    if (clientId) clientId.value = "";
+    if (clientSecret) clientSecret.value = "";
+    return;
+  }
+  const input = document.getElementById(`admin-int-${kind}-secret`);
+  if (input) input.value = "";
+}
+
+function _integrationSecretFieldsHtml(kind, selected, disabled) {
+  if (_isSberAuthProvider(selected)) {
+    return `<label for="admin-int-${kind}-sber-client-id">Client ID</label>
+      <input id="admin-int-${kind}-sber-client-id" type="text" autocomplete="off" spellcheck="false"${disabled} />
+      <label for="admin-int-${kind}-sber-client-secret">Client Secret</label>
+      <input id="admin-int-${kind}-sber-client-secret" type="password" autocomplete="new-password"${disabled} />
+      <p class="hint">Из личного кабинета Sber AI или SaluteSpeech. После записи значения не показываются.</p>`;
+  }
+  return `<label for="admin-int-${kind}-secret">API-ключ</label>
+    <input id="admin-int-${kind}-secret" type="password" autocomplete="new-password" value=""${disabled} />
+    <p class="hint">Ключ сохраняется только при записи. Просмотреть нельзя.</p>`;
+}
+
 function _integrationCardHtml(meta, ai) {
   const kind = meta.kind;
   const item = (ai.items || []).find((i) => i.kind === kind) || { active: null, candidate: null };
@@ -1042,41 +1095,39 @@ function _integrationCardHtml(meta, ai) {
           })
           .join("")
       : "";
-  const secretHint =
-    selected && selected.secret_hint === "sber_auth_key"
-      ? "Вставьте ключ авторизации из кабинета Sber (Client ID + Secret)."
-      : "Ключ сохраняется только при записи. Просмотреть нельзя.";
   const folderField =
     selected && selected.requires_folder_id
-      ? `<label>ID каталога Yandex Cloud</label>
+      ? `<label for="admin-int-${kind}-folder">ID каталога Yandex Cloud</label>
       <input id="admin-int-${kind}-folder" type="text" autocomplete="off" value="${escapeHtml(form.folder_id || "")}"${disabled} />`
       : "";
   const modelField =
     optionLabel && options.length
-      ? `<label>${escapeHtml(optionLabel)}</label>
+      ? `<label for="admin-int-${kind}-model">${escapeHtml(optionLabel)}</label>
       <select id="admin-int-${kind}-model"${disabled}>${optionOpts}</select>`
       : "";
+  const metaFormId = `admin-int-${kind}-meta-form`;
+  const secretFormId = `admin-int-${kind}-secret-form`;
   return `<article class="panel integration-card" data-integration-kind="${escapeHtml(kind)}">
-    <h3>${escapeHtml(meta.title)}</h3>
-    <p class="hint">${escapeHtml(meta.hint)}</p>
-    ${_integrationSliceHtml("Активная", item.active)}
-    ${item.candidate ? _integrationSliceHtml("Черновик", item.candidate) : ""}
-    <form class="integration-meta-form" id="admin-int-${kind}-meta-form">
-      <label>Провайдер</label>
-      <select id="admin-int-${kind}-provider"${disabled}>${providerOpts || '<option value="">Нет вариантов</option>'}</select>
-      ${modelField}
-      ${folderField}
+    <div class="integration-card-body">
+      <h3>${escapeHtml(meta.title)}</h3>
+      <p class="hint">${escapeHtml(meta.hint)}</p>
+      ${_integrationSliceHtml("Активная", item.active)}
+      ${item.candidate ? _integrationSliceHtml("Черновик", item.candidate) : ""}
+      <form class="integration-meta-form" id="${metaFormId}">
+        <label for="admin-int-${kind}-provider">Провайдер</label>
+        <select id="admin-int-${kind}-provider"${disabled}>${providerOpts || '<option value="">Нет вариантов</option>'}</select>
+        ${modelField}
+        ${folderField}
+      </form>
+      <form class="integration-secret-form" id="${secretFormId}">
+        ${_integrationSecretFieldsHtml(kind, selected, disabled)}
+      </form>
       <div class="error admin-int-error" id="admin-int-${kind}-error" ${fb.error ? "" : "hidden"}>${escapeHtml(fb.error || "")}</div>
       <p class="hint ok-line admin-int-ok" id="admin-int-${kind}-ok" ${fb.ok ? "" : "hidden"}>${escapeHtml(fb.ok || "")}</p>
-      <button class="btn" type="submit"${disabled}>Сохранить настройки</button>
-    </form>
-    <form class="integration-secret-form" id="admin-int-${kind}-secret-form">
-      <label>API-ключ</label>
-      <input id="admin-int-${kind}-secret" type="password" autocomplete="new-password" value=""${disabled} />
-      <p class="hint">${escapeHtml(secretHint)}</p>
-      <button class="btn secondary" type="submit"${disabled}>Записать ключ</button>
-    </form>
-    <div class="row-actions">
+    </div>
+    <div class="integration-card-actions row-actions">
+      <button class="btn secondary" type="submit" form="${metaFormId}"${disabled}>Сохранить настройки</button>
+      <button class="btn secondary" type="submit" form="${secretFormId}"${disabled}>Записать ключ</button>
       <button class="btn" type="button" id="admin-int-${kind}-test"${disabled}>Проверить и включить</button>
     </div>
   </article>`;
@@ -4635,10 +4686,12 @@ function bindAdminIntegrations() {
           setFeedback(kind, "Сначала укажите адрес API", "");
           return;
         }
-        const input = document.getElementById(`admin-int-${kind}-secret`);
-        const secret = (input && input.value) || "";
-        if (!secret.trim()) {
-          setFeedback(kind, "Введите API-ключ", "");
+        const providers = (state.adminIntegrations.catalog && state.adminIntegrations.catalog[kind]) || [];
+        const providerKind = document.getElementById(`admin-int-${kind}-provider`)?.value;
+        const selected = providers.find((p) => p.provider_kind === providerKind) || providers[0];
+        const parsed = _readIntegrationSecret(kind, selected);
+        if (parsed.error) {
+          setFeedback(kind, parsed.error, "");
           return;
         }
         state.adminIntegrations.busy[kind] = true;
@@ -4647,9 +4700,9 @@ function bindAdminIntegrations() {
           await apiFetch(`/api/admin/integrations/${kind}/secret`, {
             method: "POST",
             session: state.session,
-            body: { secret, ...expectedRevisions(kind) },
+            body: { secret: parsed.secret, ...expectedRevisions(kind) },
           });
-          if (input) input.value = "";
+          _clearIntegrationSecretFields(kind, selected);
           await refreshAdminIntegrations();
           setFeedback(kind, "", "Ключ записан");
           render();

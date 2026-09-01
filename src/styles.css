@@ -4652,12 +4652,50 @@ label {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1rem;
   margin-top: 1rem;
+  align-items: stretch;
 }
 
 .integration-card {
   display: flex;
   flex-direction: column;
+  gap: 0;
+  height: 100%;
+}
+
+.integration-card-body {
+  display: flex;
+  flex-direction: column;
   gap: 0.75rem;
+  flex: 1 1 auto;
+}
+
+.integration-card .integration-meta-form,
+.integration-card .integration-secret-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.integration-card .integration-meta-form > label,
+.integration-card .integration-secret-form > label {
+  margin-top: 0.25rem;
+}
+
+.integration-card .integration-meta-form > label:first-child,
+.integration-card .integration-secret-form > label:first-child {
+  margin-top: 0;
+}
+
+.integration-card-actions {
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border, #e4e7ec);
+}
+
+.integration-card-actions .btn {
+  margin-top: 0;
+  flex: 1 1 8rem;
 }
 
 .integration-slice-summary {
