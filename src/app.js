@@ -241,6 +241,7 @@ const state = {
     voiceProfileForm: {},
     voiceProfileFeedback: { error: "", ok: "" },
     voiceProfileBusy: false,
+    focusKey: null,
   },
   voiceCatalog: {
     items: [],
@@ -249,6 +250,10 @@ const state = {
     error: "",
     saveError: "",
     saveOk: false,
+    previewLoading: false,
+    previewPlaying: false,
+    previewError: "",
+    previewObjectUrl: null,
   },
   runtime: null,
 };
@@ -1225,7 +1230,7 @@ function _integrationCardHtml(meta, ai) {
       <select id="admin-int-${kind}-model"${disabled}>${optionOpts}</select>`
       : "";
   const formId = `admin-int-${kind}-form`;
-  return `<article class="panel integration-card" data-integration-kind="${escapeHtml(kind)}">
+  return `<article class="panel integration-card" data-integration-kind="${escapeHtml(kind)}" data-integration-focus="${escapeHtml(kind)}">
     <div class="integration-card-body">
       <h3>${escapeHtml(meta.title)}</h3>
       <p class="hint">${escapeHtml(meta.hint)}</p>
@@ -1247,6 +1252,89 @@ function _integrationCardHtml(meta, ai) {
   </article>`;
 }
 
+function _integrationStatusMeta(entity) {
+  if (entity?.state === "disabled") {
+    return { label: "Отключено", tone: "disabled" };
+  }
+  const active = entity?.active;
+  const candidate = entity?.candidate;
+  if (active && active.state === "active") {
+    if (candidate) {
+      return { label: "Активно · черновик", tone: "active" };
+    }
+    return { label: "Активно", tone: "active" };
+  }
+  if (candidate) {
+    return { label: "Черновик", tone: "candidate" };
+  }
+  return { label: "Не подключено", tone: "empty" };
+}
+
+function _integrationProviderLabel(entity) {
+  const slice = entity?.active || entity?.candidate;
+  if (!slice) return "—";
+  return slice.brand_label || slice.provider_kind || "—";
+}
+
+function _integrationUpdatedAt(entity) {
+  const slice = entity?.active || entity?.candidate;
+  const raw = slice?.updated_at || entity?.updated_at || "";
+  return raw ? String(raw).slice(0, 10) : "—";
+}
+
+function _integrationStatusBadge(meta) {
+  const tone = meta.tone || "empty";
+  return `<span class="integration-status integration-status--${escapeHtml(tone)}">${escapeHtml(meta.label)}</span>`;
+}
+
+function adminLlmIntegrationsTable(ai) {
+  const rows = ADMIN_LLM_KINDS.map((meta) => {
+    const item = (ai.items || []).find((i) => i.kind === meta.kind) || { active: null, candidate: null };
+    const status = _integrationStatusMeta(item);
+    const focusKey = meta.kind;
+    return `<tr>
+      <td>${escapeHtml(meta.title)}</td>
+      <td>${escapeHtml(_integrationProviderLabel(item))}</td>
+      <td>${_integrationStatusBadge(status)}</td>
+      <td>${escapeHtml(_integrationUpdatedAt(item))}</td>
+      <td><button type="button" class="btn secondary btn-table" data-focus-integration="${escapeHtml(focusKey)}">Настроить</button></td>
+    </tr>`;
+  }).join("");
+  return `<div class="panel wide integrations-table-panel">
+    <h3 class="integrations-table-title">Заведённые подключения</h3>
+    <table class="data integrations-table">
+      <thead><tr><th>Название</th><th>Провайдер</th><th>Статус</th><th>Обновлено</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function adminInstancesTable(kind, ai) {
+  const items = ai.instances?.[kind]?.items || [];
+  const rows =
+    items.length === 0
+      ? `<tr><td colspan="5" class="hint">Подключений пока нет</td></tr>`
+      : items
+          .map((inst) => {
+            const status = _integrationStatusMeta(inst);
+            return `<tr>
+              <td>${escapeHtml(inst.label || inst.slug || "—")}</td>
+              <td>${escapeHtml(_integrationProviderLabel(inst))}</td>
+              <td>${_integrationStatusBadge(status)}</td>
+              <td>${escapeHtml(_integrationUpdatedAt(inst))}</td>
+              <td><button type="button" class="btn secondary btn-table" data-focus-integration="${escapeHtml(inst.id)}">Настроить</button></td>
+            </tr>`;
+          })
+          .join("");
+  return `<div class="panel wide integrations-table-panel">
+    <h3 class="integrations-table-title">Заведённые подключения</h3>
+    <table class="data integrations-table">
+      <thead><tr><th>Название</th><th>Провайдер</th><th>Статус</th><th>Обновлено</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
 function adminIntegrationsPanel() {
   const ai = state.adminIntegrations;
   const tab = ai.tab || "llm";
@@ -1256,11 +1344,11 @@ function adminIntegrationsPanel() {
   ).join("");
   let content = "";
   if (tab === "llm") {
-    content = `<div class="integrations-grid">${ADMIN_LLM_KINDS.map((meta) => _integrationCardHtml(meta, ai)).join("")}</div>`;
+    content = `${adminLlmIntegrationsTable(ai)}<div class="integrations-grid">${ADMIN_LLM_KINDS.map((meta) => _integrationCardHtml(meta, ai)).join("")}</div>`;
   } else if (tab === "asr") {
-    content = adminIntegrationsInstancesPanel("asr");
+    content = `${adminInstancesTable("asr", ai)}${adminIntegrationsInstancesPanel("asr")}`;
   } else if (tab === "tts") {
-    content = `${adminIntegrationsInstancesPanel("tts")}${adminVoiceProfilesSection()}`;
+    content = `${adminInstancesTable("tts", ai)}${adminIntegrationsInstancesPanel("tts")}${adminVoiceProfilesSection()}`;
   }
   return `<div class="admin-integrations">
     <nav class="admin-int-tabs" role="tablist">${tabs}</nav>
@@ -1386,7 +1474,7 @@ function adminInstanceCardHtml(instance, meta, ai) {
     ? `<span class="instance-default-badge">По умолчанию</span>`
     : "";
   const formId = `inst-${formKey}-form`;
-  return `<article class="panel integration-card" data-instance-id="${escapeHtml(instance.id)}">
+  return `<article class="panel integration-card" data-instance-id="${escapeHtml(instance.id)}" data-integration-focus="${escapeHtml(instance.id)}">
     <div class="integration-card-body">
       <div class="instance-card-head">
         <h3>${escapeHtml(instance.label || instance.slug || "Подключение")}</h3>
@@ -2938,6 +3026,31 @@ function campaignWorkspace(camp) {
   </div>`;
 }
 
+function campaignVoicePreviewBlock(voiceProfileId, { locked = false } = {}) {
+  const vc = state.voiceCatalog;
+  const hasSelection = Boolean(voiceProfileId);
+  const canPreview = hasApi() && hasSelection;
+  const disabled =
+    !canPreview || vc.previewLoading || (locked && !hasSelection) ? " disabled" : "";
+  let hint = "";
+  if (!hasApi()) {
+    hint = `<p class="hint">Прослушивание доступно при подключении к серверу</p>`;
+  } else if (!hasSelection) {
+    hint = `<p class="hint">Сначала выберите голос</p>`;
+  } else if (vc.previewLoading) {
+    hint = `<p class="hint">Готовим образец…</p>`;
+  } else if (vc.previewPlaying) {
+    hint = `<p class="hint">Играет образец</p>`;
+  } else if (vc.previewError) {
+    hint = `<p class="error">${escapeHtml(vc.previewError)}</p>`;
+  }
+  return `<div class="voice-picker-preview">
+    <button type="button" class="btn secondary" id="voice-preview-btn"${disabled}>Прослушать</button>
+    ${hint}
+    <audio id="voice-preview-audio" hidden></audio>
+  </div>`;
+}
+
 function campaignVoicePickerHtml(camp) {
   const vc = state.voiceCatalog;
   const voiceLocked = Boolean(camp.ever_started) || locked();
@@ -2961,10 +3074,7 @@ function campaignVoicePickerHtml(camp) {
     return `<div class="voice-picker voice-picker--locked">
       <p class="hint">Голос зафиксирован после запуска кампании</p>
       <p><strong>${escapeHtml(label)}</strong></p>
-      <div class="voice-picker-preview">
-        <button type="button" class="btn secondary" disabled>Прослушать</button>
-        <p class="hint">Прослушать голос пока нельзя — скоро добавим</p>
-      </div>
+      ${campaignVoicePreviewBlock(selectedId, { locked: true })}
     </div>`;
   }
   const options = allItems
@@ -2996,10 +3106,7 @@ function campaignVoicePickerHtml(camp) {
       ${oneVoiceHint}
       ${unavailableHint}
     </div>
-    <div class="voice-picker-preview">
-      <button type="button" class="btn secondary" id="voice-preview-btn" disabled>Прослушать</button>
-      <p class="hint">Прослушать голос пока нельзя — скоро добавим</p>
-    </div>
+    ${campaignVoicePreviewBlock(selectedId)}
     ${savedOk}
     ${saveErr}
     ${catalogErr}
@@ -3026,6 +3133,7 @@ async function saveCampaignVoiceProfile(camp, voiceProfileId) {
   if (camp.ever_started) return;
   state.voiceCatalog.saveError = "";
   state.voiceCatalog.saveOk = false;
+  stopVoicePreview();
   try {
     const data = await apiFetch(
       `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/voice-profile`,
@@ -3044,6 +3152,59 @@ async function saveCampaignVoiceProfile(camp, voiceProfileId) {
       e?.code === "campaign_running_locked"
         ? "После запуска голос изменить нельзя"
         : errorMessage(e?.code) || "Не удалось сохранить. Попробуйте ещё раз.";
+  }
+}
+
+function stopVoicePreview() {
+  const audio = document.getElementById("voice-preview-audio");
+  if (audio) {
+    audio.pause();
+    audio.removeAttribute("src");
+  }
+  if (state.voiceCatalog.previewObjectUrl) {
+    URL.revokeObjectURL(state.voiceCatalog.previewObjectUrl);
+    state.voiceCatalog.previewObjectUrl = null;
+  }
+  state.voiceCatalog.previewPlaying = false;
+  state.voiceCatalog.previewLoading = false;
+}
+
+async function playVoicePreview(voiceProfileId) {
+  if (!hasApi() || !voiceProfileId) return;
+  stopVoicePreview();
+  state.voiceCatalog.previewError = "";
+  state.voiceCatalog.previewLoading = true;
+  render();
+  try {
+    const res = await apiFetch(
+      `/api/cabinet/voice-catalog/${encodeURIComponent(voiceProfileId)}/preview`,
+      { session: state.session }
+    );
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    state.voiceCatalog.previewObjectUrl = url;
+    state.voiceCatalog.previewLoading = false;
+    state.voiceCatalog.previewPlaying = true;
+    render();
+    const audio = document.getElementById("voice-preview-audio");
+    if (!audio) return;
+    audio.src = url;
+    audio.onended = () => {
+      state.voiceCatalog.previewPlaying = false;
+      render();
+    };
+    audio.onerror = () => {
+      state.voiceCatalog.previewPlaying = false;
+      state.voiceCatalog.previewError = "Не удалось воспроизвести образец. Попробуйте ещё раз.";
+      render();
+    };
+    await audio.play();
+  } catch (e) {
+    state.voiceCatalog.previewLoading = false;
+    state.voiceCatalog.previewPlaying = false;
+    state.voiceCatalog.previewError =
+      errorMessage(e?.code) || "Не удалось воспроизвести образец. Попробуйте ещё раз.";
+    render();
   }
 }
 
@@ -5452,6 +5613,7 @@ function bindAdminIntegrations() {
       if (!tab || tab === state.adminIntegrations.tab) return;
       state.adminIntegrations.tab = tab;
       state.adminIntegrations.addingInstance = null;
+      state.adminIntegrations.focusKey = null;
       render();
       try {
         await refreshAdminIntegrationsTabData();
@@ -5459,6 +5621,24 @@ function bindAdminIntegrations() {
       } catch (e) {
         flash(errorMessage(e?.code), "error");
       }
+    };
+  });
+
+  document.querySelectorAll("[data-focus-integration]").forEach((btn) => {
+    btn.onclick = () => {
+      const key = btn.getAttribute("data-focus-integration");
+      if (!key) return;
+      state.adminIntegrations.focusKey = key;
+      render();
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-integration-focus="${CSS.escape(key)}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+          el.classList.add("integration-card--focused");
+          window.setTimeout(() => el.classList.remove("integration-card--focused"), 1800);
+        }
+        state.adminIntegrations.focusKey = null;
+      });
     };
   });
 
@@ -6248,9 +6428,27 @@ function bindCampaignForms() {
       if (!camp || camp.ever_started || locked()) return;
       state.voiceCatalog.saveOk = false;
       state.voiceCatalog.saveError = "";
+      state.voiceCatalog.previewError = "";
+      stopVoicePreview();
       const val = voiceSelect.value;
       await saveCampaignVoiceProfile(camp, val || null);
       render();
+    };
+  }
+
+  const voicePreviewBtn = document.getElementById("voice-preview-btn");
+  if (voicePreviewBtn) {
+    voicePreviewBtn.onclick = async () => {
+      const camp = workspaceCampaign();
+      if (!camp) return;
+      const voiceId = camp.voice_profile_id || document.getElementById("campaign-voice-select")?.value;
+      if (!voiceId) return;
+      if (state.voiceCatalog.previewPlaying) {
+        stopVoicePreview();
+        render();
+        return;
+      }
+      await playVoicePreview(voiceId);
     };
   }
 }

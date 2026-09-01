@@ -4767,6 +4767,47 @@ label {
   margin-top: var(--space-3);
 }
 
+.integrations-table-panel {
+  margin-top: var(--space-3);
+}
+
+.integrations-table-title {
+  margin: 0 0 var(--space-3);
+  font-size: 1rem;
+}
+
+.integrations-table .btn-table {
+  min-height: 36px;
+  padding: var(--space-1) var(--space-3);
+}
+
+.integration-status {
+  display: inline-block;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.integration-status--active {
+  color: var(--ok, #027a48);
+}
+
+.integration-status--candidate {
+  color: var(--muted, #667085);
+}
+
+.integration-status--disabled {
+  color: var(--muted, #667085);
+}
+
+.integration-status--empty {
+  color: var(--muted, #98a2b3);
+}
+
+.integration-card--focused {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: var(--space-1);
+}
+
 .instance-card-head {
   display: flex;
   flex-wrap: wrap;
