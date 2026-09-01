@@ -1,5 +1,5 @@
 ---
-description: CallMate design system — tokens, spacing, density, anti-patterns for vanilla SPA (app.js + styles.css). Copy this pack from New docs/handoff/fe/callmate-cursor-pack to Callmate repo root.
+description: Scorix design system — tokens, spacing, density, anti-patterns for vanilla SPA (app.js + styles.css). Copy this pack from New docs/handoff/fe/scorix-cursor-pack to Scorix repo root.
 globs:
   - "**/*.css"
   - "**/*.js"
@@ -7,7 +7,7 @@ globs:
 alwaysApply: false
 ---
 
-# CallMate design rules (Cursor)
+# Scorix design rules (Cursor)
 
 Read `.interface-design/system.md` before visual changes.
 

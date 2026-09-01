@@ -32,7 +32,7 @@ const ERROR_BY_CODE = {
 /** FE-238 — пачки первой загрузки в пустую кампанию */
 const CONTACT_UPLOAD_CHUNK_SIZE = 2000;
 const CONTACT_UPLOAD_MAX_ROWS = 2_000_000;
-const SPEED_PROMISE_DISMISS_KEY = "cm_speed_promise_dismissed";
+const SPEED_PROMISE_DISMISS_KEY = "scx_speed_promise_dismissed";
 
 const ARCHETYPE_CARDS = [
   { id: "", title: "Подберём сами", hint: "По цели и сведениям", auto: true },
@@ -111,13 +111,13 @@ function saveJson(key, value, store = localStorage) {
 /** Session bearer is a secret (ARCH-108): sessionStorage only, never localStorage. */
 function readSessionToken() {
   try {
-    const fromSession = sessionStorage.getItem("cm_session") || "";
+    const fromSession = sessionStorage.getItem("scx_session") || "";
     if (fromSession) return fromSession;
     // One-shot migrate away from legacy localStorage leak.
-    const legacy = localStorage.getItem("cm_session") || "";
+    const legacy = localStorage.getItem("scx_session") || "";
     if (legacy) {
-      sessionStorage.setItem("cm_session", legacy);
-      localStorage.removeItem("cm_session");
+      sessionStorage.setItem("scx_session", legacy);
+      localStorage.removeItem("scx_session");
     }
     return legacy;
   } catch {
@@ -127,9 +127,9 @@ function readSessionToken() {
 
 function writeSessionToken(token) {
   try {
-    if (token) sessionStorage.setItem("cm_session", token);
-    else sessionStorage.removeItem("cm_session");
-    localStorage.removeItem("cm_session");
+    if (token) sessionStorage.setItem("scx_session", token);
+    else sessionStorage.removeItem("scx_session");
+    localStorage.removeItem("scx_session");
   } catch {
     /* private mode / blocked storage */
   }
@@ -147,19 +147,19 @@ function ensureCompanyIds(list) {
       history: c.history || [],
     };
   });
-  if (changed) saveJson("cm_companies", out);
+  if (changed) saveJson("scx_companies", out);
   return out;
 }
 
 const state = {
   session: readSessionToken(),
-  role: localStorage.getItem("cm_role") || "",
-  theme: localStorage.getItem("cm_theme") || "light",
-  companyLocked: localStorage.getItem("cm_locked") === "1",
-  impersonate: loadJson("cm_impersonate", null, sessionStorage) || loadJson("cm_impersonate", null),
-  companies: ensureCompanyIds(loadJson("cm_companies", [])),
-  campaigns: loadJson("cm_campaigns", []),
-  telephony: loadJson("cm_telephony", {
+  role: localStorage.getItem("scx_role") || "",
+  theme: localStorage.getItem("scx_theme") || "light",
+  companyLocked: localStorage.getItem("scx_locked") === "1",
+  impersonate: loadJson("scx_impersonate", null, sessionStorage) || loadJson("scx_impersonate", null),
+  companies: ensureCompanyIds(loadJson("scx_companies", [])),
+  campaigns: loadJson("scx_campaigns", []),
+  telephony: loadJson("scx_telephony", {
     status: "unknown",
     provider: null,
     lines: null,
@@ -167,9 +167,9 @@ const state = {
     lastError: null,
     checking: false,
   }),
-  companyBalance: Number(localStorage.getItem("cm_co_balance") || "500"),
-  companyTariff: Number(localStorage.getItem("cm_co_tariff") || "5"),
-  activeCampaignId: localStorage.getItem("cm_active_campaign") || "",
+  companyBalance: Number(localStorage.getItem("scx_co_balance") || "500"),
+  companyTariff: Number(localStorage.getItem("scx_co_tariff") || "5"),
+  activeCampaignId: localStorage.getItem("scx_active_campaign") || "",
   uiFlash: null,
   ui: {
     telephonyPanel: null,
@@ -205,8 +205,8 @@ const state = {
     contactUploadPreview: null,
   },
   adminSettings: {
-    batch_interval_sec: Number(localStorage.getItem("cm_interval") || "30"),
-    default_price_per_minute: Number(localStorage.getItem("cm_default_tariff") || "0"),
+    batch_interval_sec: Number(localStorage.getItem("scx_interval") || "30"),
+    default_price_per_minute: Number(localStorage.getItem("scx_default_tariff") || "0"),
   },
   pendingTotp: null,
   adminTotp: {
@@ -228,22 +228,22 @@ const state = {
 };
 
 function persistCampaigns() {
-  saveJson("cm_campaigns", state.campaigns);
+  saveJson("scx_campaigns", state.campaigns);
 }
 
 function persistCompanies() {
-  saveJson("cm_companies", state.companies);
+  saveJson("scx_companies", state.companies);
 }
 
 function persistTelephony() {
-  saveJson("cm_telephony", state.telephony);
+  saveJson("scx_telephony", state.telephony);
 }
 
 function persistActiveCampaign() {
   if (state.activeCampaignId) {
-    localStorage.setItem("cm_active_campaign", state.activeCampaignId);
+    localStorage.setItem("scx_active_campaign", state.activeCampaignId);
   } else {
-    localStorage.removeItem("cm_active_campaign");
+    localStorage.removeItem("scx_active_campaign");
   }
 }
 
@@ -254,7 +254,7 @@ function setActiveCampaignId(id) {
 
 function setTheme(theme) {
   state.theme = theme;
-  localStorage.setItem("cm_theme", theme);
+  localStorage.setItem("scx_theme", theme);
   document.documentElement.setAttribute("data-theme", theme);
 }
 
@@ -634,7 +634,7 @@ function lockedBanner() {
   if (!state.companyLocked || state.impersonate) return "";
   return `<div class="banner banner-danger">
     <strong>Аккаунт заблокирован. Можно смотреть, менять и запускать нельзя</strong>
-    <p class="hint">Чтобы снять блокировку, напишите в поддержку CallMate</p>
+    <p class="hint">Чтобы снять блокировку, напишите в поддержку Scorix</p>
   </div>`;
 }
 
@@ -672,7 +672,7 @@ function mobileNavHtml(activeTab, tabs = CABINET_TABS) {
 function cabinetShell(activeTab, bodyHtml) {
   return `<div class="page-shell page-shell-desk">
     <header class="page-topbar page-topbar-desk">
-      <p class="brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
+      <p class="brand"><span class="brand-mark" aria-hidden="true"></span>Scorix</p>
       ${appTabsHtml(activeTab)}
       ${mobileNavHtml(activeTab)}
       <div class="page-topbar-actions">
@@ -708,7 +708,7 @@ function adminShell(activeTab = "companies") {
   }
   return `<div class="page-shell">
     <header class="page-topbar">
-      <p class="brand">CallMate · Админка</p>
+      <p class="brand">Scorix · Админка</p>
       ${appTabsHtml(activeTab, ADMIN_TABS)}
       <div class="page-topbar-actions">
         ${themeControls()}
@@ -1585,7 +1585,7 @@ function pageAccount() {
   const lockedNote =
     state.companyLocked && !state.impersonate
       ? `<div class="banner banner-danger desk-banner"><strong>Аккаунт заблокирован</strong>
-         <p class="hint">Можно смотреть, менять и запускать нельзя. Напишите в поддержку CallMate.</p></div>`
+         <p class="hint">Можно смотреть, менять и запускать нельзя. Напишите в поддержку Scorix.</p></div>`
       : "";
   const body = `${lockedNote}
     <div class="desk-link-cards account-links">
@@ -1654,8 +1654,8 @@ function pageTariffs() {
     </div>
     <div class="billing-cta panel">
       <h3 class="desk-block-title">Пополнение баланса</h3>
-      <p class="hint">В кабинете оплаты пока нет — пополнение через поддержку CallMate.</p>
-      <a class="btn" href="mailto:support@callmate.ru?subject=Пополнение%20баланса">Связаться для пополнения</a>
+      <p class="hint">В кабинете оплаты пока нет — пополнение через поддержку Scorix.</p>
+      <a class="btn" href="mailto:support@scorix.ru?subject=Пополнение%20баланса">Связаться для пополнения</a>
     </div>`;
   return deskPage("Биллинг", "Баланс, тариф и пакеты минут", body, {
     id: "sec-tariffs",
@@ -1669,11 +1669,11 @@ async function refreshCabinetMe() {
   const me = await apiFetch("/api/cabinet/me", { session: state.session });
   if (me.balance_rub != null) {
     state.companyBalance = Number(me.balance_rub);
-    localStorage.setItem("cm_co_balance", String(state.companyBalance));
+    localStorage.setItem("scx_co_balance", String(state.companyBalance));
   }
   if (me.price_per_minute != null) {
     state.companyTariff = Number(me.price_per_minute);
-    localStorage.setItem("cm_co_tariff", String(state.companyTariff));
+    localStorage.setItem("scx_co_tariff", String(state.companyTariff));
   }
   if (me.locked != null) state.companyLocked = Boolean(me.locked);
 }
@@ -3085,13 +3085,13 @@ function sectionContacts(camp) {
           <p class="hint">Форматы: .csv, .xlsx, .xls · нужен столбец с телефоном</p>
           <div class="upload-zone-actions">
             <button class="btn${contacts.length ? " secondary" : ""}" type="button" id="pick-file" ${roAttr()}${state.ui.contactsUploading ? " disabled" : ""}>Выбрать файл</button>
-            <a class="btn ghost" href="#" id="download-template" download="callmate-contacts-template.csv">Скачать шаблон</a>
+            <a class="btn ghost" href="#" id="download-template" download="scorix-contacts-template.csv">Скачать шаблон</a>
           </div>
           <input class="sr-file" type="file" id="contact-file" accept=".csv,.xlsx,.xls" tabindex="-1" aria-hidden="true" ${roAttr()} ${state.ui.contactsUploading ? "disabled" : ""} />
         </div>
         <details class="consent-disclosure"${state.ui.consentOpen ? " open" : ""}>
           <summary>Юридическое предупреждение</summary>
-          <p class="consent">Загружая номера, вы подтверждаете законные основания для обзвона. CallMate согласия не собирает — храните документы у себя.</p>
+          <p class="consent">Загружая номера, вы подтверждаете законные основания для обзвона. Scorix согласия не собирает — храните документы у себя.</p>
         </details>
       </div>
       ${state.ui.contactUploadPreview ? renderUploadPreview(state.ui.contactUploadPreview) : ""}
@@ -3565,7 +3565,7 @@ function loginView() {
     : `<p class="hint">Сначала укажите адрес API — сейчас только проверка вёрстки</p>`;
   return `<div class="login-wrap login-wrap-center">
     <form class="login-panel" id="login-form" data-testid="login-panel">
-      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>Scorix</p>
       <h1 class="login-panel-title">Вход</h1>
       ${apiHint}
       <div class="flow-fields login-fields">
@@ -3588,7 +3588,7 @@ function loginView() {
 function totpVerifyView() {
   return `<div class="login-wrap login-wrap-center">
     <form class="login-panel" id="totp-form">
-      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>Scorix</p>
       <h1 class="login-panel-title">Код из приложения</h1>
       <p class="hint">Введите 6-значный код из Google Authenticator или Microsoft Authenticator</p>
       <div class="flow-fields login-fields">
@@ -3620,7 +3620,7 @@ function forbiddenView() {
   }
   return `<div class="login-wrap login-wrap-center">
     <div class="login-panel">
-      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>Scorix</p>
       <h1 class="login-panel-title">Нет доступа</h1>
       <p class="hint login-panel-hint">У вас нет доступа к этой странице</p>
       <div class="login-panel-actions">
@@ -3997,11 +3997,11 @@ function bindShell() {
       }
       state.impersonate = null;
       try {
-        sessionStorage.removeItem("cm_impersonate");
+        sessionStorage.removeItem("scx_impersonate");
       } catch {
         /* ignore */
       }
-      localStorage.removeItem("cm_impersonate");
+      localStorage.removeItem("scx_impersonate");
       state.ui.adminLoaded = false;
       navigate("/admin");
       render();
@@ -4046,7 +4046,7 @@ function bindAdminForms() {
           });
           state.adminSettings.batch_interval_sec = data.batch_interval_sec;
         } else {
-          localStorage.setItem("cm_interval", String(v));
+          localStorage.setItem("scx_interval", String(v));
           state.adminSettings.batch_interval_sec = v;
         }
         err.hidden = true;
@@ -4134,7 +4134,7 @@ function bindAdminForms() {
           });
           state.adminSettings.default_price_per_minute = data.default_price_per_minute;
         } else {
-          localStorage.setItem("cm_default_tariff", String(v));
+          localStorage.setItem("scx_default_tariff", String(v));
           state.adminSettings.default_price_per_minute = v;
         }
         err.hidden = true;
@@ -4424,12 +4424,12 @@ function bindAdminForms() {
             impersonated_company_id: res.company_id,
           });
           state.impersonate = { id: c.id, name: c.name, companyId: c.id };
-          saveJson("cm_impersonate", state.impersonate, sessionStorage);
-          localStorage.removeItem("cm_impersonate");
+          saveJson("scx_impersonate", state.impersonate, sessionStorage);
+          localStorage.removeItem("scx_impersonate");
         } else {
           state.impersonate = { id: c.id, name: c.name };
-          saveJson("cm_impersonate", state.impersonate, sessionStorage);
-          localStorage.removeItem("cm_impersonate");
+          saveJson("scx_impersonate", state.impersonate, sessionStorage);
+          localStorage.removeItem("scx_impersonate");
           state.companyLocked = c.access_status === "locked";
         }
         navigate("/cabinet/campaigns");
@@ -5529,7 +5529,7 @@ function bindContacts() {
       const blob = new Blob([contactsTemplateCsv()], { type: "text/csv;charset=utf-8" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "callmate-contacts-template.csv";
+      a.download = "scorix-contacts-template.csv";
       a.click();
       URL.revokeObjectURL(a.href);
     };
@@ -6225,7 +6225,7 @@ function bindLaunch() {
         prog.textContent = hasApi() ? "Запускаем…" : "Нужен адрес API";
       }
       if (!hasApi()) {
-        flash("Укажите адрес API (CALLMATE_API_BASE), чтобы начать обзвон");
+        flash("Укажите адрес API (SCORIX_API_BASE), чтобы начать обзвон");
         if (prog) prog.hidden = true;
         return;
       }
@@ -6503,12 +6503,12 @@ function applySessionPayload(data) {
   state.companyLocked = Boolean(data.company_locked);
   if (data.impersonated_company_id) {
     state.impersonate = { companyId: data.impersonated_company_id };
-    saveJson("cm_impersonate", state.impersonate, sessionStorage);
-    localStorage.removeItem("cm_impersonate");
+    saveJson("scx_impersonate", state.impersonate, sessionStorage);
+    localStorage.removeItem("scx_impersonate");
   }
   writeSessionToken(state.session);
-  localStorage.setItem("cm_role", state.role);
-  localStorage.setItem("cm_locked", state.companyLocked ? "1" : "0");
+  localStorage.setItem("scx_role", state.role);
+  localStorage.setItem("scx_locked", state.companyLocked ? "1" : "0");
 }
 
 async function restoreSession() {
@@ -6533,14 +6533,14 @@ function clearSession() {
   state.ui.campaignsLoaded = false;
   writeSessionToken("");
   try {
-    sessionStorage.removeItem("cm_impersonate");
+    sessionStorage.removeItem("scx_impersonate");
   } catch {
     /* ignore */
   }
-  localStorage.removeItem("cm_session");
-  localStorage.removeItem("cm_role");
-  localStorage.removeItem("cm_locked");
-  localStorage.removeItem("cm_impersonate");
+  localStorage.removeItem("scx_session");
+  localStorage.removeItem("scx_role");
+  localStorage.removeItem("scx_locked");
+  localStorage.removeItem("scx_impersonate");
 }
 
 /** Clear local session first so UI always leaves; server logout is best-effort. */

@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { stubCabinet, gotoHash, SMOKE_CAMPAIGN_ID } from "./helpers.js";
 
-test.describe("Callmate cabinet smoke (offline stub)", () => {
+test.describe("Scorix cabinet smoke (offline stub)", () => {
   test("login screen renders brand and form", async ({ page }) => {
     await page.addInitScript(() => {
-      Object.defineProperty(window, "CALLMATE_API_BASE", {
+      Object.defineProperty(window, "SCORIX_API_BASE", {
         configurable: true,
         get() {
           return "";
@@ -16,7 +16,7 @@ test.describe("Callmate cabinet smoke (offline stub)", () => {
     await page.goto("/");
     await expect(page.locator("#login-form")).toBeVisible();
     await expect(page.getByTestId("login-panel")).toBeVisible();
-    await expect(page.getByText("CallMate").first()).toBeVisible();
+    await expect(page.getByText("Scorix").first()).toBeVisible();
     await expect(page.locator("#login")).toBeVisible();
     await expect(page.locator("#password")).toBeVisible();
     await expect(page.locator("#submit")).toBeVisible();

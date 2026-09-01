@@ -1,7 +1,7 @@
 {
-  "name": "callmate",
+  "name": "scorix",
   "private": true,
-  "description": "Callmate cabinet UI (static)",
+  "description": "Scorix cabinet UI (static)",
   "scripts": {
     "dev": "python3 scripts/dev-server.py 8765",
     "serve:static": "python3 -m http.server 8765 --bind 127.0.0.1",

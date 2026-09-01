@@ -614,7 +614,7 @@ Replay: `New/scripts/bench_replay_c01.py`, `bench_replay_c16_c20.py`; live: `sta
 
 
 
-# Бенчмарк stage-based LLM Callmate
+# Бенчмарк stage-based LLM Scorix
 **Модель:** `gemini-3.7-flash-high`  
 **Кейсы:** C-02, C-03, C-04, C-05  
 **Движок:** `backend/voice/stage_engine.py`  

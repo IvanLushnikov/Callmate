@@ -38,26 +38,26 @@ const SMOKE_CAMPAIGN = {
 };
 
 /**
- * Disable CALLMATE_API_BASE (index.html would otherwise set it on localhost)
+ * Disable SCORIX_API_BASE (index.html would otherwise set it on localhost)
  * and seed localStorage before app.js boots.
  */
 export async function stubCabinet(page, { campaign = SMOKE_CAMPAIGN } = {}) {
   await page.addInitScript(
     ({ camp }) => {
-      Object.defineProperty(window, "CALLMATE_API_BASE", {
+      Object.defineProperty(window, "SCORIX_API_BASE", {
         configurable: true,
         get() {
           return "";
         },
         set() {},
       });
-      localStorage.setItem("cm_session", "smoke-session");
-      localStorage.setItem("cm_role", "company");
-      localStorage.setItem("cm_locked", "0");
-      localStorage.setItem("cm_co_balance", "500");
-      localStorage.setItem("cm_co_tariff", "5");
-      localStorage.setItem("cm_campaigns", JSON.stringify([camp]));
-      localStorage.setItem("cm_active_campaign", camp.id);
+      localStorage.setItem("scx_session", "smoke-session");
+      localStorage.setItem("scx_role", "company");
+      localStorage.setItem("scx_locked", "0");
+      localStorage.setItem("scx_co_balance", "500");
+      localStorage.setItem("scx_co_tariff", "5");
+      localStorage.setItem("scx_campaigns", JSON.stringify([camp]));
+      localStorage.setItem("scx_active_campaign", camp.id);
     },
     { camp: campaign }
   );

@@ -1,6 +1,6 @@
 import { defineConfig } from "@playwright/test";
 
-const PORT = Number(process.env.CALLMATE_E2E_PORT || 8765);
+const PORT = Number(process.env.SCORIX_E2E_PORT || 8765);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
