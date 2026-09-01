@@ -3465,6 +3465,25 @@ function archetypeCardsHtml(selectedId, { locked = false, name = "archetype-pick
   </div>`;
 }
 
+function readPreviewFromDom() {
+  return {
+    greeting: document.getElementById("preview-greeting")?.value.trim() ?? "",
+    says: document.getElementById("preview-says")?.value.trim() ?? "",
+    replies: document.getElementById("preview-replies")?.value.trim() ?? "",
+    tone: document.getElementById("preview-tone")?.value.trim() ?? "",
+  };
+}
+
+function applyScenarioResponse(camp, data) {
+  if (!data || typeof data !== "object") return;
+  if (data.scenario_text != null) camp.scenarioText = data.scenario_text;
+  if (Array.isArray(data.stages)) camp.stages = data.stages;
+  if (Array.isArray(data.verdicts)) camp.verdicts = data.verdicts;
+  if (data.preview && typeof data.preview === "object") {
+    camp.preview = mapPreviewFromApi(data.preview, null);
+  }
+}
+
 function readKnowledgePackFromDom(archetype) {
   const pack = {};
   const lines = (id) =>
@@ -6057,13 +6076,14 @@ function hasAssembledScenario(camp) {
   return hasPreview || hasStages || hasScenario;
 }
 
-async function performPreviewSave(camp, { name, goal, details, archetype, archetype_locked, knowledge_pack }) {
+async function performPreviewSave(camp, { name, goal, details, archetype, archetype_locked, knowledge_pack, preview }) {
   camp.name = name;
   camp.goal = goal;
   camp.details = details;
   if (archetype !== undefined) camp.archetype = archetype;
   if (archetype_locked !== undefined) camp.archetype_locked = archetype_locked;
   if (knowledge_pack !== undefined) camp.knowledge_pack = knowledge_pack;
+  if (preview !== undefined) camp.preview = preview;
   state.ui.generateError = null;
   const blockMsg = clientPackGapsBlock(camp.archetype, camp.knowledge_pack);
   if (blockMsg) {
@@ -6077,6 +6097,15 @@ async function performPreviewSave(camp, { name, goal, details, archetype, archet
       state.ui.generatePending = true;
       render();
       const body = { goal, details, knowledge_pack: camp.knowledge_pack || {} };
+      const previewBlocks = preview ?? readPreviewFromDom();
+      if (
+        previewBlocks.greeting ||
+        previewBlocks.says ||
+        previewBlocks.replies ||
+        previewBlocks.tone
+      ) {
+        body.preview = previewBlocks;
+      }
       if (camp.archetype_locked && camp.archetype) {
         body.archetype = camp.archetype;
         body.archetype_locked = true;
@@ -6163,7 +6192,7 @@ function bindCampaignForms() {
         flash("Допишите сведения", "error");
         return;
       }
-      const payload = { name, goal, details, archetype, archetype_locked, knowledge_pack };
+      const payload = { name, goal, details, archetype, archetype_locked, knowledge_pack, preview: readPreviewFromDom() };
       if (hasAssembledScenario(camp)) {
         state.ui.pendingPreviewSave = payload;
         state.ui.saveRebuildOpen = true;
@@ -6331,15 +6360,15 @@ function bindCampaignForms() {
       };
       try {
         if (hasApi()) {
-          await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
+          const updated = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
             method: "PUT",
             session: state.session,
             body: {
               scenario_text: camp.scenarioText,
               stages: camp.stages || [],
-              verdicts: camp.verdicts || [],
             },
           });
+          applyScenarioResponse(camp, updated);
         }
         persistCampaigns();
         document.getElementById("scenario-ok").hidden = false;
@@ -6376,15 +6405,15 @@ function bindCampaignForms() {
         };
         try {
           if (hasApi()) {
-            await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
+            const updated = await apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/scenario`, {
               method: "PUT",
               session: state.session,
               body: {
                 scenario_text: camp.scenarioText || "",
                 stages: camp.stages,
-                verdicts: camp.verdicts || [],
               },
             });
+            applyScenarioResponse(camp, updated);
           }
           persistCampaigns();
           flash("Черновик сохранён");
