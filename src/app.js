@@ -1,4 +1,4 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession } from "./api.js";
+import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession, verifyTotpLogin } from "./api.js";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -180,6 +180,14 @@ const state = {
   adminSettings: {
     batch_interval_sec: Number(localStorage.getItem("cm_interval") || "30"),
     default_price_per_minute: Number(localStorage.getItem("cm_default_tariff") || "0"),
+  },
+  pendingTotp: null,
+  adminTotp: {
+    enabled: null,
+    setup: null,
+    recoveryCodes: null,
+    busy: false,
+    error: "",
   },
   adminIntegrations: {
     loaded: false,
@@ -831,6 +839,47 @@ function adminCompanyCardInline(c) {
 function adminSettings() {
   const interval = String(state.adminSettings.batch_interval_sec ?? 30);
   const tariff = String(state.adminSettings.default_price_per_minute ?? 0);
+  const totp = state.adminTotp;
+  let totpPanel = `<div class="panel" style="margin-top:1rem"><h3>Двухфакторная аутентификация</h3><p class="hint">Загружаем…</p></div>`;
+  if (totp.recoveryCodes?.length) {
+    const codes = totp.recoveryCodes.map((c) => `<li><code>${escapeHtml(c)}</code></li>`).join("");
+    totpPanel = `<div class="panel" style="margin-top:1rem">
+      <h3>Резервные коды</h3>
+      <p class="hint">Сохраните коды в надёжном месте. Каждый код работает один раз, если нет доступа к телефону.</p>
+      <ul class="admin-company-history">${codes}</ul>
+      <button class="btn secondary" type="button" id="totp-recovery-done">Готово</button>
+    </div>`;
+  } else if (totp.enabled === true) {
+    totpPanel = `<div class="panel" style="margin-top:1rem">
+      <h3>Двухфакторная аутентификация</h3>
+      <p class="hint ok-line">Подключена. При входе нужен код из Google Authenticator или Microsoft Authenticator.</p>
+    </div>`;
+  } else if (totp.enabled === false && totp.setup) {
+    const uri = totp.setup.otpauth_uri || "";
+    const qr = uri
+      ? `<img class="totp-qr" alt="QR для приложения аутентификации" width="180" height="180" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&amp;data=${encodeURIComponent(uri)}" />`
+      : "";
+    totpPanel = `<div class="panel" style="margin-top:1rem">
+      <h3>Подключение 2FA</h3>
+      <p class="hint">Отсканируйте QR-код или введите секрет вручную в Google Authenticator / Microsoft Authenticator.</p>
+      ${qr}
+      <p class="hint">Секрет: <code id="totp-secret">${escapeHtml(totp.setup.secret || "")}</code></p>
+      <form id="totp-confirm-form">
+        <label for="totp-setup-code">Код из приложения</label>
+        <input id="totp-setup-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
+        <div class="error" id="totp-setup-error" hidden></div>
+        <button class="btn" type="submit"${totp.busy ? " disabled" : ""}>Подтвердить</button>
+        <button class="btn secondary" type="button" id="totp-setup-cancel"${totp.busy ? " disabled" : ""}>Отмена</button>
+      </form>
+    </div>`;
+  } else if (totp.enabled === false) {
+    totpPanel = `<div class="panel" style="margin-top:1rem">
+      <h3>Двухфакторная аутентификация</h3>
+      <p class="hint">Дополнительный код из приложения на телефоне при каждом входе в админку.</p>
+      <div class="error" id="totp-setup-error" hidden></div>
+      <button class="btn" type="button" id="totp-setup-begin"${totp.busy ? " disabled" : ""}>Подключить 2FA</button>
+    </div>`;
+  }
   return `<div>
     <form class="panel" id="interval-form">
       <h3>Интервал подачи пачек</h3>
@@ -851,6 +900,7 @@ function adminSettings() {
       <p class="hint ok-line" id="tariff-ok" hidden>Сохранено</p>
       <button class="btn" type="submit">Сохранить</button>
     </form>
+    ${totpPanel}
   </div>`;
 }
 
@@ -991,6 +1041,16 @@ async function refreshAdminSettings() {
     batch_interval_sec: data.batch_interval_sec ?? 30,
     default_price_per_minute: data.default_price_per_minute ?? 0,
   };
+}
+
+async function refreshAdminTotpStatus() {
+  if (!hasApi() || state.role !== "superadmin" || state.impersonate) return;
+  const data = await apiFetch("/api/admin/totp/status", { session: state.session });
+  state.adminTotp.enabled = Boolean(data.enabled);
+  if (data.enabled) {
+    state.adminTotp.setup = null;
+    state.adminTotp.recoveryCodes = null;
+  }
 }
 
 async function ensureAdminData() {
@@ -3308,6 +3368,32 @@ function loginView() {
   </div>`;
 }
 
+function totpVerifyView() {
+  return `<div class="login-wrap login-wrap-center">
+    <form class="login-panel" id="totp-form">
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>CallMate</p>
+      <h1 class="login-panel-title">Код из приложения</h1>
+      <p class="hint">Введите 6-значный код из Google Authenticator или Microsoft Authenticator</p>
+      <div class="flow-fields login-fields">
+        <div class="preview-field preview-field-full">
+          <label for="totp-code">Код</label>
+          <input id="totp-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
+        </div>
+        <details class="hint" style="margin-top:0.5rem">
+          <summary>Нет доступа к телефону?</summary>
+          <div class="preview-field preview-field-full" style="margin-top:0.5rem">
+            <label for="totp-recovery">Резервный код</label>
+            <input id="totp-recovery" autocomplete="off" placeholder="xxxx-xxxx" />
+          </div>
+        </details>
+      </div>
+      <button class="btn login-submit" id="totp-submit" type="submit">Продолжить</button>
+      <button class="btn secondary login-panel-secondary" id="totp-back" type="button">Назад</button>
+      <div class="error" id="totp-error" hidden></div>
+    </form>
+  </div>`;
+}
+
 function forbiddenView() {
   let action = `<button class="btn login-submit" id="forbidden-action" type="button">Войти</button>`;
   if (state.session && state.role === "company") {
@@ -3424,6 +3510,10 @@ function render() {
           bindShell();
         })
         .catch((e) => flash(errorMessage(e?.code), "error"));
+    } else if (hasApi() && path === "/admin/settings" && state.adminTotp.enabled === null) {
+      void refreshAdminTotpStatus()
+        .then(() => render())
+        .catch((e) => flash(errorMessage(e?.code), "error"));
     } else if (hasApi() && !state.ui.adminLoaded) {
       void ensureAdminData();
     }
@@ -3432,6 +3522,15 @@ function render() {
   if (path === "/forbidden") {
     app.innerHTML = forbiddenView();
     bindForbidden();
+    return;
+  }
+  if (path === "/login/totp") {
+    if (!state.pendingTotp?.token) {
+      navigate("/login");
+      return;
+    }
+    app.innerHTML = totpVerifyView();
+    bindTotpVerify();
     return;
   }
   app.innerHTML = loginView();
@@ -3691,6 +3790,7 @@ function bindShell() {
   bindWorkspaceTabs();
   bindMobileNav();
   bindAdminForms();
+  bindAdminTotp();
   bindAdminIntegrations();
   bindCampaignForms();
   bindTelephony();
@@ -4205,6 +4305,90 @@ function bindAdminForms() {
       } catch (ex) {
         flash(errorMessage(ex?.code), "error");
       }
+    };
+  }
+}
+
+function bindAdminTotp() {
+  const beginBtn = document.getElementById("totp-setup-begin");
+  if (beginBtn) {
+    beginBtn.onclick = async () => {
+      const err = document.getElementById("totp-setup-error");
+      state.adminTotp.busy = true;
+      state.adminTotp.error = "";
+      render();
+      try {
+        const data = await apiFetch("/api/admin/totp/setup/begin", {
+          method: "POST",
+          session: state.session,
+        });
+        state.adminTotp.setup = data;
+        state.adminTotp.busy = false;
+        render();
+      } catch (ex) {
+        state.adminTotp.busy = false;
+        if (err) {
+          err.hidden = false;
+          err.textContent = errorMessage(ex?.code);
+        } else {
+          flash(errorMessage(ex?.code), "error");
+        }
+        render();
+      }
+    };
+  }
+
+  const cancelBtn = document.getElementById("totp-setup-cancel");
+  if (cancelBtn) {
+    cancelBtn.onclick = () => {
+      state.adminTotp.setup = null;
+      state.adminTotp.error = "";
+      render();
+    };
+  }
+
+  const confirmForm = document.getElementById("totp-confirm-form");
+  if (confirmForm) {
+    confirmForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const code = document.getElementById("totp-setup-code")?.value.trim();
+      const err = document.getElementById("totp-setup-error");
+      if (!code) {
+        if (err) {
+          err.hidden = false;
+          err.textContent = "Введите код из приложения";
+        }
+        return;
+      }
+      state.adminTotp.busy = true;
+      render();
+      try {
+        const data = await apiFetch("/api/admin/totp/setup/confirm", {
+          method: "POST",
+          session: state.session,
+          body: { code },
+        });
+        state.adminTotp.enabled = true;
+        state.adminTotp.setup = null;
+        state.adminTotp.recoveryCodes = data.recovery_codes || [];
+        state.adminTotp.busy = false;
+        render();
+      } catch (ex) {
+        state.adminTotp.busy = false;
+        if (err) {
+          err.hidden = false;
+          err.textContent = errorMessage(ex?.code);
+        }
+        render();
+      }
+    };
+  }
+
+  const recoveryDone = document.getElementById("totp-recovery-done");
+  if (recoveryDone) {
+    recoveryDone.onclick = () => {
+      state.adminTotp.recoveryCodes = null;
+      render();
     };
   }
 }
@@ -6110,6 +6294,12 @@ function bindLogin() {
     submit.disabled = true;
     try {
       const data = await apiLogin(loginName, password);
+      if (data.totp_required && data.pending_token) {
+        state.pendingTotp = { token: data.pending_token, role: data.role || "superadmin" };
+        navigate("/login/totp");
+        return;
+      }
+      state.pendingTotp = null;
       applySessionPayload(data);
       navigate(data.role === "superadmin" ? "/admin" : "/cabinet/campaigns");
     } catch (e) {
@@ -6118,6 +6308,52 @@ function bindLogin() {
       err.textContent = errorMessage(e?.code || "invalid_credentials");
     } finally {
       submit.textContent = "Войти";
+      submit.disabled = false;
+    }
+  });
+}
+
+function bindTotpVerify() {
+  const form = document.getElementById("totp-form");
+  const err = document.getElementById("totp-error");
+  const back = document.getElementById("totp-back");
+  if (back) {
+    back.onclick = () => {
+      state.pendingTotp = null;
+      navigate("/login");
+    };
+  }
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const code = document.getElementById("totp-code")?.value.trim();
+    const recoveryCode = document.getElementById("totp-recovery")?.value.trim();
+    if (!code && !recoveryCode) {
+      err.hidden = false;
+      err.textContent = "Введите код или резервный код";
+      return;
+    }
+    const submit = document.getElementById("totp-submit");
+    submit.textContent = "Проверяем…";
+    submit.disabled = true;
+    try {
+      const data = await verifyTotpLogin({
+        pendingToken: state.pendingTotp?.token,
+        code: code || undefined,
+        recoveryCode: recoveryCode || undefined,
+      });
+      state.pendingTotp = null;
+      applySessionPayload(data);
+      navigate(data.role === "superadmin" ? "/admin" : "/cabinet/campaigns");
+    } catch (e) {
+      err.hidden = false;
+      err.textContent = errorMessage(e?.code || "invalid_totp");
+      if (e?.code === "invalid_pending_token") {
+        state.pendingTotp = null;
+        setTimeout(() => navigate("/login"), 1500);
+      }
+    } finally {
+      submit.textContent = "Продолжить";
       submit.disabled = false;
     }
   });
