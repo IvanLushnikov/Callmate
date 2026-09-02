@@ -4873,3 +4873,49 @@ label {
 .voice-picker--locked .voice-picker-preview {
   opacity: 0.85;
 }
+
+.login-panel-footer {
+  margin-top: var(--space-4);
+  text-align: center;
+}
+
+.login-panel-muted {
+  margin-top: var(--space-2);
+  text-align: center;
+  opacity: 0.85;
+}
+
+.field-error {
+  color: var(--danger, #b42318);
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+}
+
+.tariff-buy-col {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.btn-compact {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.billing-spinner::before {
+  content: "";
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: 0.375rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.1em;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
