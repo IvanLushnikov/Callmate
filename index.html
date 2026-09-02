@@ -10,23 +10,39 @@
       href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./src/styles.css" />
-  </head>
-  <body>
-    <div id="app"></div>
     <script>
-      // GitHub Pages demo → Render API. Любой свой домен → same origin (/api).
+      // Production: /lk/… → base /lk. Demo (GitHub Pages) и локально → "".
       (function () {
+        var path = location.pathname || "/";
+        var m = path.match(/^(\/lk)(?:\/|$)/);
+        window.SCORIX_BASE_PATH = m ? m[1] : "";
         var host = location.hostname;
         var local =
           host === "localhost" || host === "127.0.0.1" || host === "[::1]";
         var githubPages = host.endsWith(".github.io");
+        // GitHub Pages demo → Render API. Свой домен (в т.ч. /lk) → same origin.
         window.SCORIX_API_BASE =
           local || !githubPages
             ? location.origin
             : "https://callmate-api.onrender.com";
+        var assetBase = window.SCORIX_BASE_PATH || ".";
+        var link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = assetBase + "/src/styles.css";
+        document.head.appendChild(link);
       })();
     </script>
-    <script type="module" src="./src/app.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script>
+      (function () {
+        var assetBase = window.SCORIX_BASE_PATH || ".";
+        var s = document.createElement("script");
+        s.type = "module";
+        s.src = assetBase + "/src/app.js";
+        document.body.appendChild(s);
+      })();
+    </script>
   </body>
 </html>
