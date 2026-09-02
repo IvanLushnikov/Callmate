@@ -20,6 +20,25 @@ test.describe("Scorix cabinet smoke (offline stub)", () => {
     await expect(page.locator("#login")).toBeVisible();
     await expect(page.locator("#password")).toBeVisible();
     await expect(page.locator("#submit")).toBeVisible();
+    await expect(page.getByTestId("register-link")).toBeVisible();
+  });
+
+  test("register screen renders form", async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "SCORIX_API_BASE", {
+        configurable: true,
+        get() {
+          return "";
+        },
+        set() {},
+      });
+      localStorage.clear();
+    });
+    await gotoHash(page, "/register");
+    await expect(page.getByTestId("register-panel")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Создать аккаунт" })).toBeVisible();
+    await expect(page.locator("#reg-name")).toBeVisible();
+    await expect(page.locator("#reg-email")).toBeVisible();
   });
 
   test("campaigns list shows seeded campaign and status", async ({ page }) => {

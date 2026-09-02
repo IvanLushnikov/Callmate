@@ -1,4 +1,19 @@
-import { login as apiLogin, logout as apiLogout, hasApi, apiFetch, errorMessage, fetchSession, verifyTotpLogin, fetchHealth } from "./api.js";
+import {
+  login as apiLogin,
+  logout as apiLogout,
+  hasApi,
+  apiFetch,
+  errorMessage,
+  fetchSession,
+  verifyTotpLogin,
+  fetchHealth,
+  registerAccount,
+  verifyEmail,
+  resendVerification,
+  billingCheckout,
+  fetchBillingPackages,
+  fetchPayment,
+} from "./api.js";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -40,7 +55,65 @@ function telephonyErrorText(code) {
 /** FE-238 — пачки первой загрузки в пустую кампанию */
 const CONTACT_UPLOAD_CHUNK_SIZE = 2000;
 const CONTACT_UPLOAD_MAX_ROWS = 2_000_000;
-const SPEED_PROMISE_DISMISS_KEY = "scx_speed_promise_dismissed";
+const PENDING_EMAIL_KEY = "scx_pending_email";
+const PENDING_LOGIN_KEY = "scx_pending_login";
+const PAYMENT_POLL_MS = 2500;
+const PAYMENT_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
+function isDevEnvironment() {
+  if (typeof window !== "undefined" && window.SCORIX_ENV === "development") return true;
+  const host = typeof location !== "undefined" ? location.hostname : "";
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+}
+
+function maskEmail(email) {
+  const raw = String(email || "").trim();
+  const at = raw.indexOf("@");
+  if (at <= 1) return raw;
+  return `${raw.slice(0, 2)}***${raw.slice(at)}`;
+}
+
+function readPendingEmail() {
+  try {
+    return sessionStorage.getItem(PENDING_EMAIL_KEY) || sessionStorage.getItem(PENDING_LOGIN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writePendingEmail(email) {
+  try {
+    const v = String(email || "").trim();
+    if (v) {
+      sessionStorage.setItem(PENDING_EMAIL_KEY, v);
+      sessionStorage.setItem(PENDING_LOGIN_KEY, v);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function routeQuery() {
+  const path = route();
+  const q = path.indexOf("?");
+  if (q === -1) return new URLSearchParams();
+  return new URLSearchParams(path.slice(q + 1));
+}
+
+function normalizeExternalReturnPath() {
+  if (typeof location === "undefined") return;
+  const billing = location.pathname.match(/\/billing\/return\/?$/);
+  if (billing) {
+    const qs = location.search || "";
+    history.replaceState(null, "", `${location.origin}/#/billing/return${qs}`);
+    return;
+  }
+  const verify = location.pathname.match(/\/verify-email\/?$/);
+  if (verify) {
+    const qs = location.search || "";
+    history.replaceState(null, "", `${location.origin}/#/verify${qs}`);
+  }
+}
 
 const ARCHETYPE_CARDS = [
   { id: "", title: "Подберём сами", hint: "По цели и сведениям", auto: true },
@@ -195,6 +268,8 @@ const state = {
   })(),
   companyBalance: hasApi() ? null : Number(localStorage.getItem("scx_co_balance") || "500"),
   companyTariff: hasApi() ? null : Number(localStorage.getItem("scx_co_tariff") || "5"),
+  selfServiceTopup: false,
+  billingPackages: null,
   activeCampaignId: localStorage.getItem("scx_active_campaign") || "",
   uiFlash: null,
   ui: {
@@ -240,6 +315,23 @@ const state = {
     default_price_per_minute: Number(localStorage.getItem("scx_default_tariff") || "0"),
   },
   pendingTotp: null,
+  authUi: {
+    verifyState: "idle",
+    verifyError: "",
+    verifyTokenProcessed: "",
+    resendCooldown: 0,
+    resendOk: false,
+    resendBusy: false,
+  },
+  billingUi: {
+    checkoutBusy: false,
+    pollPaymentId: "",
+    pollStartedAt: 0,
+    pollStatus: "",
+    pollAmountRub: null,
+    pollPackageId: "",
+    pollError: "",
+  },
   adminTotp: {
     enabled: null,
     setup: null,
@@ -2335,11 +2427,11 @@ function pageAccount() {
 }
 
 const TARIFF_PACKAGES = [
-  { minutes: 1000, price: 8, amount: 8000 },
-  { minutes: 3000, price: 7, amount: 21000 },
-  { minutes: 5000, price: 6, amount: 30000 },
-  { minutes: 10000, price: 5, amount: 50000 },
-  { minutes: 25000, price: 4, amount: 100000 },
+  { package_id: "pkg_1000", minutes: 1000, price: 8, amount: 8000 },
+  { package_id: "pkg_3000", minutes: 3000, price: 7, amount: 21000 },
+  { package_id: "pkg_5000", minutes: 5000, price: 6, amount: 30000 },
+  { package_id: "pkg_10000", minutes: 10000, price: 5, amount: 50000 },
+  { package_id: "pkg_25000", minutes: 25000, price: 4, amount: 100000 },
 ];
 
 function pageTariffs() {
@@ -2353,14 +2445,29 @@ function pageTariffs() {
   const bal = state.companyBalance != null ? Number(state.companyBalance) : null;
   const tariff = state.companyTariff != null && Number(state.companyTariff) > 0 ? Number(state.companyTariff) : null;
   const approx = bal != null && tariff != null ? Math.floor(bal / tariff) : null;
-  const rows = TARIFF_PACKAGES.map((p) => {
-    const current = tariff > 0 && Number(tariff) === p.price;
-    return `<tr class="${current ? "tariff-row-current" : ""}">
+  const topupOn = hasApi() ? state.selfServiceTopup : isDevEnvironment();
+  const packages = tariffPackagesForUi();
+  const rows = packages
+    .map((p) => {
+      const current = tariff > 0 && Number(tariff) === p.price;
+      const buyBtn = topupOn
+        ? `<button class="btn secondary btn-compact" type="button" data-buy-package="${escapeHtml(p.package_id)}" ${state.billingUi.checkoutBusy ? "disabled" : ""}>Купить пакет</button>`
+        : "";
+      return `<tr class="${current ? "tariff-row-current" : ""}">
       <td>${escapeHtml(String(p.minutes.toLocaleString("ru-RU")))} мин${current ? ' <span class="status-badge status-badge--ok status-badge--compact">Текущий</span>' : ""}</td>
       <td>${escapeHtml(String(p.price))} ₽/мин</td>
       <td>${escapeHtml(String(p.amount.toLocaleString("ru-RU")))} ₽</td>
+      <td class="tariff-buy-col">${buyBtn}</td>
     </tr>`;
-  }).join("");
+    })
+    .join("");
+  const topupBlock = topupOn
+    ? `<p class="hint">Выберите пакет и перейдите к оплате.${state.billingUi.checkoutBusy ? " Переходим к оплате…" : ""}</p>`
+    : `<div class="billing-cta panel">
+      <h3 class="desk-block-title">Пополнение баланса</h3>
+      <p class="hint">Пополнение через поддержку Scorix</p>
+      <a class="btn" href="mailto:support@scorix.ru?subject=Пополнение%20баланса">Связаться для пополнения</a>
+    </div>`;
   const body = `<div class="desk-stat-row desk-stat-row-3">
       ${deskStatCard("Баланс", bal != null ? `${escapeHtml(String(bal))} ₽` : "—")}
       ${deskStatCard(
@@ -2379,17 +2486,13 @@ function pageTariffs() {
       <p class="hint desk-block-lead">Чем больше пакет — тем ниже цена минуты. Минимальный пакет — 1 000 минут.</p>
       ${deskSurface(
         `<table class="data tariff-table">
-          <thead><tr><th>Пакет</th><th>Цена за минуту</th><th>Сумма</th></tr></thead>
+          <thead><tr><th>Пакет</th><th>Цена за минуту</th><th>Сумма</th>${topupOn ? "<th></th>" : ""}</tr></thead>
           <tbody>${rows}</tbody>
         </table>`,
         { className: "desk-table-surface" }
       )}
       <p class="hint">Считаем минуты состоявшегося разговора. Недозвон не тарифицируем.</p>
-    </div>
-    <div class="billing-cta panel">
-      <h3 class="desk-block-title">Пополнение баланса</h3>
-      <p class="hint">В кабинете оплаты пока нет — пополнение через поддержку Scorix.</p>
-      <a class="btn" href="mailto:support@scorix.ru?subject=Пополнение%20баланса">Связаться для пополнения</a>
+      ${topupBlock}
     </div>`;
   return deskPage("Биллинг", "Баланс, тариф и пакеты минут", body, {
     id: "sec-tariffs",
@@ -2404,7 +2507,37 @@ async function refreshCabinetMe() {
   if (me.balance_rub != null) state.companyBalance = Number(me.balance_rub);
   if (me.price_per_minute != null) state.companyTariff = Number(me.price_per_minute);
   if (me.locked != null) state.companyLocked = Boolean(me.locked);
+  if (me.self_service_topup_enabled != null) {
+    state.selfServiceTopup = Boolean(me.self_service_topup_enabled);
+  }
   state.ui.cabinetMeLoaded = true;
+}
+
+async function refreshBillingPackages() {
+  if (!hasApi() || !state.session) return;
+  try {
+    const data = await fetchBillingPackages(state.session);
+    state.billingPackages = Array.isArray(data?.items) ? data.items : null;
+  } catch {
+    state.billingPackages = null;
+  }
+}
+
+function tariffPackagesForUi() {
+  if (state.billingPackages?.length) {
+    return state.billingPackages.map((p) => ({
+      package_id: p.package_id,
+      minutes: p.minutes,
+      price: p.price_per_minute,
+      amount: p.amount_rub,
+    }));
+  }
+  return TARIFF_PACKAGES;
+}
+
+function packageMinutes(packageId) {
+  const pkg = tariffPackagesForUi().find((p) => p.package_id === packageId);
+  return pkg?.minutes ?? null;
 }
 
 function pageAnalytics() {
@@ -2565,11 +2698,11 @@ function reasonLinkHtml(reason, { asButton = true } = {}) {
 
 function reasonCtaHtml(reason) {
   const jump = reasonJumpTarget(reason);
-  const text = escapeHtml(reason.text);
+  const text = escapeHtml(reason.cta || reason.text);
   if (jump === "integrations") {
     return `<a class="btn secondary ready-cta-btn" href="#/cabinet/integrations">${text}</a>`;
   }
-  if (jump === "account") {
+  if (jump === "account" || reason.money) {
     return `<a class="btn secondary ready-cta-btn" href="#/cabinet/tariffs">${text}</a>`;
   }
   if (jump) {
@@ -4237,7 +4370,15 @@ function launchBlockReasons(camp) {
     state.companyBalance <= 0 &&
     !state.impersonate
   ) {
-    reasons.push({ text: "Недостаточно средств", money: true });
+    const topupOn = hasApi() ? state.selfServiceTopup : isDevEnvironment();
+    reasons.push({
+      text: "Недостаточно средств",
+      money: true,
+      hint: topupOn
+        ? "Пополните баланс пакетом минут в разделе «Тарифы»."
+        : "Пополнение делает поддержка Scorix",
+      cta: topupOn ? "Пополнить" : "",
+    });
   }
   if (locked()) reasons.push({ text: "Аккаунт заблокирован" });
   if (isWeakScenario(camp) && camp.dial_state === "draft") reasons.push({ text: "Пока нельзя начать обзвон", weak: true });
@@ -4559,8 +4700,176 @@ function loginView() {
       </div>
       <button class="btn login-submit" id="submit" type="submit">Войти</button>
       <div class="error" id="form-error" hidden></div>
+      <p class="login-panel-footer hint"><a href="#/register" data-testid="register-link">Создать аккаунт</a></p>
+      <p class="hint login-panel-muted">Зарегистрируйте компанию и подтвердите email</p>
       <p class="hint desktop-note">Удобнее на компьютере. Телефонную вёрстку сделаем позже</p>
     </form>
+  </div>`;
+}
+
+function registerView() {
+  return `<div class="login-wrap login-wrap-center">
+    <form class="login-panel" id="register-form" data-testid="register-panel">
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>Scorix</p>
+      <h1 class="login-panel-title">Создать аккаунт</h1>
+      <div class="flow-fields login-fields">
+        <div class="preview-field preview-field-full">
+          <label for="reg-name">Название компании</label>
+          <input id="reg-name" name="name" autocomplete="organization" required />
+          <div class="field-error" id="reg-name-error" hidden></div>
+        </div>
+        <div class="preview-field preview-field-full">
+          <label for="reg-email">Email</label>
+          <input id="reg-email" name="login" type="email" autocomplete="email" required />
+          <p class="hint">На этот адрес придёт письмо для подтверждения. Он же будет логином.</p>
+          <div class="field-error" id="reg-email-error" hidden></div>
+        </div>
+        <div class="preview-field preview-field-full">
+          <label for="reg-password">Пароль</label>
+          <input id="reg-password" name="password" type="password" autocomplete="new-password" minlength="8" required />
+          <p class="hint">Не короче 8 символов</p>
+          <div class="field-error" id="reg-password-error" hidden></div>
+        </div>
+        <label class="check-line">
+          <input id="reg-consent" type="checkbox" required />
+          <span>Я принимаю <a href="#" target="_blank" rel="noopener">условия использования</a> и <a href="#" target="_blank" rel="noopener">политику обработки данных</a></span>
+        </label>
+        <div class="field-error" id="reg-consent-error" hidden></div>
+      </div>
+      <button class="btn login-submit" id="reg-submit" type="submit" disabled>Зарегистрироваться</button>
+      <div class="error" id="reg-form-error" hidden></div>
+      <p class="login-panel-footer hint"><a href="#/login">Уже есть аккаунт? Войти</a></p>
+    </form>
+  </div>`;
+}
+
+function checkEmailView() {
+  const email = readPendingEmail();
+  const masked = maskEmail(email);
+  const cd = state.authUi.resendCooldown;
+  const resendLabel =
+    cd > 0 ? `Отправить снова через ${cd} сек` : state.authUi.resendBusy ? "Отправляем…" : "Отправить снова";
+  const resendDisabled = cd > 0 || state.authUi.resendBusy || !email;
+  const okLine = state.authUi.resendOk ? `<p class="hint ok-line">Письмо отправлено</p>` : "";
+  return `<div class="login-wrap login-wrap-center">
+    <div class="login-panel" data-testid="check-email-panel">
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>Scorix</p>
+      <h1 class="login-panel-title">Проверьте почту</h1>
+      <p class="hint">Мы отправили письмо на ${escapeHtml(masked || email || "ваш email")}. Откройте ссылку в письме, чтобы подтвердить аккаунт.</p>
+      <p class="hint">Не пришло? Проверьте «Спам» или запросите письмо снова.</p>
+      <button class="btn secondary" type="button" id="resend-verification" ${resendDisabled ? "disabled" : ""}>${escapeHtml(resendLabel)}</button>
+      ${okLine}
+      <div class="error" id="resend-error" hidden></div>
+      <p class="login-panel-footer hint"><a href="#/login">Вернуться ко входу</a></p>
+    </div>
+  </div>`;
+}
+
+function verifyView() {
+  const st = state.authUi.verifyState;
+  if (st === "loading") {
+    return `<div class="login-wrap login-wrap-center"><div class="login-panel"><p class="hint">Подтверждаем email…</p></div></div>`;
+  }
+  if (st === "error") {
+    const err = state.authUi.verifyError || "Ссылка недействительна. Запросите новое письмо.";
+    return `<div class="login-wrap login-wrap-center">
+      <div class="login-panel" data-testid="verify-error-panel">
+        <h1 class="login-panel-title">Не удалось подтвердить</h1>
+        <div class="error">${escapeHtml(err)}</div>
+        <a class="btn secondary" href="#/check-email">Отправить письмо снова</a>
+        <p class="login-panel-footer hint"><a href="#/login">Войти</a></p>
+      </div>
+    </div>`;
+  }
+  return `<div class="login-wrap login-wrap-center">
+    <div class="login-panel" data-testid="verify-success-panel">
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>Scorix</p>
+      <h1 class="login-panel-title">Email подтверждён</h1>
+      <p class="hint">Аккаунт активен. Войдите с email и паролем, которые указали при регистрации.</p>
+      <p class="hint">Сразу попадёте в кабинет кампаний</p>
+      <a class="btn login-submit" href="#/login" id="verify-to-login">Войти</a>
+    </div>
+  </div>`;
+}
+
+function billingReturnView() {
+  return `<div class="login-wrap login-wrap-center">
+    <div class="login-panel" data-testid="billing-return-panel">
+      <p class="login-panel-brand"><span class="brand-mark" aria-hidden="true"></span>Scorix</p>
+      <h1 class="login-panel-title">Ждём подтверждение оплаты…</h1>
+      <p class="hint">Не закрывайте вкладку. Обычно это занимает до минуты.</p>
+      <p class="hint billing-spinner" aria-live="polite">Проверяем статус…</p>
+      <div class="error" id="billing-poll-error" hidden></div>
+    </div>
+  </div>`;
+}
+
+function billingSuccessView() {
+  const amount = state.billingUi.pollAmountRub;
+  const tariff = state.companyTariff;
+  const bal = state.companyBalance;
+  return `<div class="login-wrap login-wrap-center">
+    <div class="login-panel" data-testid="billing-success-panel">
+      <h1 class="login-panel-title">Оплата прошла</h1>
+      <p class="hint">На баланс зачислено ${escapeHtml(String(amount ?? "—"))} ₽. Новый тариф — ${escapeHtml(String(tariff ?? "—"))} ₽/мин.</p>
+      <p class="hint"><strong>Баланс:</strong> ${escapeHtml(String(bal ?? "—"))} ₽</p>
+      <div class="login-panel-actions">
+        <a class="btn login-submit" href="#/cabinet/campaigns">К кампаниям</a>
+        <a class="btn secondary login-panel-secondary" href="#/cabinet/tariffs">К тарифам</a>
+      </div>
+    </div>
+  </div>`;
+}
+
+const BILLING_ERROR_COPY = {
+  failed: {
+    title: "Оплата не прошла",
+    body: "Деньги не списаны. Попробуйте снова или выберите другой способ.",
+  },
+  canceled: { title: "Оплата отменена", body: "Вы прервали оплату. Баланс не изменился." },
+  expired: { title: "Время оплаты истекло", body: "Сессия оплаты закончилась. Начните покупку пакета заново." },
+  unavailable: {
+    title: "Пополнение недоступно",
+    body: "Сейчас нельзя оплатить онлайн. Напишите в поддержку Scorix.",
+  },
+  timeout: {
+    title: "Ждём подтверждение",
+    body: "Платёж ещё обрабатывается. Обновите страницу через минуту или проверьте баланс в «Тарифах».",
+  },
+  checkout: { title: "Не удалось начать оплату", body: "Попробуйте позже." },
+};
+
+function billingErrorView(reason) {
+  const copy = BILLING_ERROR_COPY[reason] || BILLING_ERROR_COPY.checkout;
+  const refreshBtn =
+    reason === "timeout"
+      ? `<button class="btn secondary" type="button" id="billing-error-refresh">Обновить</button>`
+      : "";
+  return `<div class="login-wrap login-wrap-center">
+    <div class="login-panel" data-testid="billing-error-panel">
+      <h1 class="login-panel-title">${escapeHtml(copy.title)}</h1>
+      <p class="hint">${escapeHtml(copy.body)}</p>
+      <div class="login-panel-actions">
+        ${refreshBtn}
+        <a class="btn login-submit" href="#/cabinet/tariffs">К тарифам</a>
+      </div>
+    </div>
+  </div>`;
+}
+
+function stubPayView(paymentId) {
+  const devNote = isDevEnvironment()
+    ? `<p class="hint">Только для тестового стенда</p>
+       <button class="btn login-submit" type="button" id="stub-simulate-success">Симулировать успех</button>
+       <div class="error" id="stub-error" hidden></div>`
+    : `<p class="hint">Перенаправляем к оплате…</p>`;
+  return `<div class="login-wrap login-wrap-center">
+    <div class="login-panel" data-testid="stub-pay-panel">
+      <h1 class="login-panel-title">Тестовая оплата</h1>
+      <p class="hint">Payment ID: ${escapeHtml(paymentId || "—")}</p>
+      ${devNote}
+      <a class="btn secondary" href="#/billing/return?payment_id=${encodeURIComponent(paymentId || "")}">К ожиданию</a>
+    </div>
   </div>`;
 }
 
@@ -4681,7 +4990,8 @@ function render() {
     }
     if (hasApi() && (cabinet.page === "tariffs" || cabinet.page === "account" || cabinet.page === "workspace")) {
       void refreshCabinetMe()
-        .then(() => {
+        .then(async () => {
+          if (cabinet.page === "tariffs") await refreshBillingPackages().catch(() => {});
           if (cabinet.page === "tariffs" || cabinet.page === "account") render();
         })
         .catch((e) => {
@@ -4744,6 +5054,81 @@ function render() {
     }
     app.innerHTML = totpVerifyView();
     bindTotpVerify();
+    return;
+  }
+  if (path.startsWith("/register")) {
+    app.innerHTML = registerView();
+    bindRegister();
+    return;
+  }
+  if (path.startsWith("/check-email")) {
+    if (!readPendingEmail()) {
+      navigate("/register");
+      return;
+    }
+    app.innerHTML = checkEmailView();
+    bindCheckEmail();
+    return;
+  }
+  if (path.startsWith("/verify")) {
+    app.innerHTML = verifyView();
+    bindVerify();
+    return;
+  }
+  if (path.startsWith("/billing/return")) {
+    if (!state.session) {
+      navigate("/login");
+      return;
+    }
+    app.innerHTML = billingReturnView();
+    bindBillingReturn();
+    return;
+  }
+  if (path.startsWith("/billing/success")) {
+    if (!state.session) {
+      navigate("/login");
+      return;
+    }
+    if (hasApi() && state.billingUi.pollAmountRub == null) {
+      void (async () => {
+        const pid = routeQuery().get("payment_id");
+        if (pid) {
+          try {
+            const data = await fetchPayment(pid, state.session);
+            state.billingUi.pollAmountRub = data?.amount_rub ?? null;
+            state.billingUi.pollPackageId = data?.package_id || "";
+          } catch {
+            /* ignore */
+          }
+        }
+        await refreshCabinetMe().catch(() => {});
+        render();
+      })();
+      app.innerHTML = billingReturnView();
+      return;
+    }
+    app.innerHTML = billingSuccessView();
+    return;
+  }
+  if (path.startsWith("/billing/error")) {
+    const reason = routeQuery().get("reason") || "checkout";
+    if (!state.session && reason !== "checkout") {
+      navigate("/login");
+      return;
+    }
+    app.innerHTML = billingErrorView(reason);
+    bindBillingError(reason);
+    return;
+  }
+  if (path.startsWith("/billing/stub-pay")) {
+    const paymentId = routeQuery().get("payment_id") || "";
+    app.innerHTML = stubPayView(paymentId);
+    bindStubPay(paymentId);
+    return;
+  }
+  if (path === "/login" || path.startsWith("/login?")) {
+    app.innerHTML = loginView();
+    bindLogin();
     return;
   }
   app.innerHTML = loginView();
@@ -5017,6 +5402,345 @@ function bindShell() {
   bindLaunch();
   bindStatuses();
   bindAnalytics();
+  bindTariffsBilling();
+}
+
+function bindTariffsBilling() {
+  document.querySelectorAll("[data-buy-package]").forEach((btn) => {
+    btn.onclick = () => {
+      const packageId = btn.getAttribute("data-buy-package");
+      if (!packageId || state.billingUi.checkoutBusy) return;
+      void startCheckout(packageId);
+    };
+  });
+}
+
+let paymentPollTimer = null;
+let resendCooldownTimer = null;
+
+function clearPaymentPoll() {
+  if (paymentPollTimer) {
+    clearInterval(paymentPollTimer);
+    paymentPollTimer = null;
+  }
+}
+
+async function startCheckout(packageId) {
+  if (!state.session) {
+    navigate("/login");
+    return;
+  }
+  state.billingUi.checkoutBusy = true;
+  render();
+  if (!hasApi()) {
+    state.billingUi.checkoutBusy = false;
+    const pkg = tariffPackagesForUi().find((p) => p.package_id === packageId);
+    state.billingUi.pollAmountRub = pkg?.amount ?? null;
+    state.billingUi.pollPackageId = packageId;
+    navigate("/billing/success");
+    return;
+  }
+  try {
+    const idem = `fe-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const result = await billingCheckout({
+      packageId,
+      session: state.session,
+      idempotencyKey: idem,
+    });
+    const redirect = result?.redirect_url || "";
+    const paymentId = result?.payment_id || "";
+    if (isDevEnvironment() && redirect.includes("/stub/pay") && paymentId) {
+      state.billingUi.checkoutBusy = false;
+      navigate(`/billing/stub-pay?payment_id=${encodeURIComponent(paymentId)}`);
+      return;
+    }
+    if (redirect) {
+      window.location.href = redirect;
+      return;
+    }
+    throw Object.assign(new Error("checkout"), { code: "request_failed" });
+  } catch (e) {
+    state.billingUi.checkoutBusy = false;
+    const reason = e?.code === "payment_unavailable" ? "unavailable" : "checkout";
+    navigate(`/billing/error?reason=${reason}`);
+  }
+}
+
+async function pollPaymentStatus(paymentId) {
+  if (!paymentId || !state.session) return;
+  try {
+    const data = await fetchPayment(paymentId, state.session);
+    state.billingUi.pollStatus = data?.status || "";
+    state.billingUi.pollAmountRub = data?.amount_rub ?? null;
+    state.billingUi.pollPackageId = data?.package_id || "";
+    if (data?.status === "succeeded") {
+      clearPaymentPoll();
+      await refreshCabinetMe();
+      navigate(`/billing/success?payment_id=${encodeURIComponent(paymentId)}`);
+      render();
+      return;
+    }
+    if (data?.status === "failed" || data?.status === "canceled" || data?.status === "expired") {
+      clearPaymentPoll();
+      navigate(`/billing/error?reason=${encodeURIComponent(data.status)}`);
+      return;
+    }
+    if (Date.now() - state.billingUi.pollStartedAt > PAYMENT_POLL_TIMEOUT_MS) {
+      clearPaymentPoll();
+      navigate("/billing/error?reason=timeout");
+    }
+  } catch (e) {
+    const errEl = document.getElementById("billing-poll-error");
+    if (errEl) {
+      errEl.hidden = false;
+      errEl.textContent = errorMessage(e?.code);
+    }
+  }
+}
+
+function startPaymentPoll(paymentId) {
+  clearPaymentPoll();
+  state.billingUi.pollPaymentId = paymentId;
+  state.billingUi.pollStartedAt = Date.now();
+  void pollPaymentStatus(paymentId);
+  paymentPollTimer = setInterval(() => {
+    void pollPaymentStatus(paymentId);
+  }, PAYMENT_POLL_MS);
+}
+
+async function hmacSha256Hex(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function simulateStubPaymentSuccess(paymentId) {
+  if (!hasApi()) {
+    navigate(`/billing/return?payment_id=${encodeURIComponent(paymentId)}`);
+    return;
+  }
+  const secret = typeof window !== "undefined" ? window.SCORIX_DEV_WEBHOOK_SECRET : "";
+  if (!secret) {
+    throw Object.assign(new Error("dev_secret"), { code: "api_not_configured" });
+  }
+  const pay = await fetchPayment(paymentId, state.session);
+  const body = JSON.stringify({
+    event: "payment.succeeded",
+    payment_id: paymentId,
+    amount_rub: pay?.amount_rub,
+  });
+  const sig = await hmacSha256Hex(secret, body);
+  const res = await fetch(`${window.SCORIX_API_BASE || ""}/api/webhooks/payment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Payment-Signature": sig },
+    body,
+  });
+  if (!res.ok) {
+    throw Object.assign(new Error("webhook_failed"), { code: "request_failed" });
+  }
+  navigate(`/billing/return?payment_id=${encodeURIComponent(paymentId)}`);
+}
+
+function startResendCooldown(seconds = 60) {
+  state.authUi.resendCooldown = seconds;
+  if (resendCooldownTimer) clearInterval(resendCooldownTimer);
+  resendCooldownTimer = setInterval(() => {
+    state.authUi.resendCooldown = Math.max(0, state.authUi.resendCooldown - 1);
+    if (state.authUi.resendCooldown <= 0 && resendCooldownTimer) {
+      clearInterval(resendCooldownTimer);
+      resendCooldownTimer = null;
+    }
+    if (route().startsWith("/check-email")) render();
+  }, 1000);
+}
+
+function bindRegister() {
+  const form = document.getElementById("register-form");
+  const consent = document.getElementById("reg-consent");
+  const submit = document.getElementById("reg-submit");
+  const syncConsent = () => {
+    if (submit) submit.disabled = !consent?.checked;
+  };
+  consent?.addEventListener("change", syncConsent);
+  syncConsent();
+  form?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("reg-name")?.value?.trim() || "";
+    const login = document.getElementById("reg-email")?.value?.trim() || "";
+    const password = document.getElementById("reg-password")?.value || "";
+    const formErr = document.getElementById("reg-form-error");
+    ["reg-name-error", "reg-email-error", "reg-password-error", "reg-consent-error"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.hidden = true;
+    });
+    if (formErr) formErr.hidden = true;
+    let invalid = false;
+    if (!name) {
+      invalid = true;
+      const el = document.getElementById("reg-name-error");
+      if (el) {
+        el.hidden = false;
+        el.textContent = "Заполните это поле";
+      }
+    }
+    if (!login || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login)) {
+      invalid = true;
+      const el = document.getElementById("reg-email-error");
+      if (el) {
+        el.hidden = false;
+        el.textContent = login ? "Укажите корректный email" : "Заполните это поле";
+      }
+    }
+    if (password.length < 8) {
+      invalid = true;
+      const el = document.getElementById("reg-password-error");
+      if (el) {
+        el.hidden = false;
+        el.textContent = password ? "Пароль не короче 8 символов" : "Заполните это поле";
+      }
+    }
+    if (!consent?.checked) {
+      invalid = true;
+      const el = document.getElementById("reg-consent-error");
+      if (el) {
+        el.hidden = false;
+        el.textContent = "Примите условия, чтобы продолжить";
+      }
+    }
+    if (invalid) return;
+    submit.textContent = "Регистрируем…";
+    submit.disabled = true;
+    try {
+      if (hasApi()) {
+        await registerAccount({ name, login, password });
+      }
+      writePendingEmail(login);
+      navigate("/check-email");
+    } catch (err) {
+      if (err?.code === "rate_limited" && formErr) {
+        formErr.hidden = false;
+        formErr.textContent = errorMessage("rate_limited");
+      } else if (formErr) {
+        formErr.hidden = false;
+        formErr.textContent = errorMessage(err?.code);
+      }
+    } finally {
+      submit.textContent = "Зарегистрироваться";
+      submit.disabled = !consent?.checked;
+    }
+  });
+}
+
+function bindCheckEmail() {
+  document.getElementById("resend-verification")?.addEventListener("click", async () => {
+    const email = readPendingEmail();
+    if (!email || state.authUi.resendBusy || state.authUi.resendCooldown > 0) return;
+    const err = document.getElementById("resend-error");
+    if (err) err.hidden = true;
+    state.authUi.resendBusy = true;
+    state.authUi.resendOk = false;
+    render();
+    try {
+      if (hasApi()) await resendVerification({ login: email });
+      state.authUi.resendOk = true;
+      startResendCooldown(60);
+    } catch (e) {
+      if (err) {
+        err.hidden = false;
+        err.textContent = errorMessage(e?.code);
+      }
+    } finally {
+      state.authUi.resendBusy = false;
+      render();
+    }
+  });
+}
+
+function bindVerify() {
+  const params = routeQuery();
+  const token = params.get("token") || "";
+  if (!token) {
+    state.authUi.verifyState = "error";
+    state.authUi.verifyError = "Ссылка недействительна. Запросите новое письмо.";
+    return;
+  }
+  if (state.authUi.verifyTokenProcessed === token) return;
+  state.authUi.verifyTokenProcessed = token;
+  state.authUi.verifyState = "loading";
+  render();
+  const cleanUrl = () => {
+    try {
+      history.replaceState(null, "", `${location.pathname}${location.search}#/verify`);
+    } catch {
+      /* ignore */
+    }
+  };
+  void (async () => {
+    try {
+      if (hasApi()) {
+        await verifyEmail({ token });
+      }
+      state.authUi.verifyState = "verified";
+      cleanUrl();
+      render();
+      const loginEl = document.getElementById("verify-to-login");
+      const pending = readPendingEmail();
+      if (loginEl && pending) loginEl.href = `#/login`;
+    } catch (e) {
+      state.authUi.verifyState = "error";
+      state.authUi.verifyError = errorMessage(e?.code);
+      cleanUrl();
+      render();
+    }
+  })();
+}
+
+function bindBillingReturn() {
+  const paymentId = routeQuery().get("payment_id") || state.billingUi.pollPaymentId || "";
+  if (!paymentId) {
+    navigate("/billing/error?reason=checkout");
+    return;
+  }
+  startPaymentPoll(paymentId);
+}
+
+function bindBillingError(reason) {
+  document.getElementById("billing-error-refresh")?.addEventListener("click", () => {
+    const pid = routeQuery().get("payment_id") || state.billingUi.pollPaymentId;
+    if (pid) {
+      navigate(`/billing/return?payment_id=${encodeURIComponent(pid)}`);
+    } else {
+      render();
+    }
+  });
+}
+
+function bindStubPay(paymentId) {
+  document.getElementById("stub-simulate-success")?.addEventListener("click", async () => {
+    const err = document.getElementById("stub-error");
+    if (err) err.hidden = true;
+    try {
+      await simulateStubPaymentSuccess(paymentId);
+      render();
+    } catch (e) {
+      if (err) {
+        err.hidden = false;
+        err.textContent =
+          e?.code === "api_not_configured"
+            ? "Для симуляции задайте SCORIX_DEV_WEBHOOK_SECRET (dev/staging)."
+            : errorMessage(e?.code);
+      }
+    }
+  });
 }
 
 function bindAdminForms() {
@@ -7948,6 +8672,11 @@ function bindLogin() {
       applySessionPayload(data);
       navigate(data.role === "superadmin" ? "/admin" : "/cabinet/campaigns");
     } catch (e) {
+      if (e?.code === "email_not_verified") {
+        writePendingEmail(loginName);
+        navigate("/check-email");
+        return;
+      }
       document.getElementById("password").value = "";
       err.hidden = false;
       err.textContent = errorMessage(e?.code || "invalid_credentials");
@@ -8013,4 +8742,5 @@ function escapeHtml(s) {
 }
 
 window.addEventListener("hashchange", render);
+normalizeExternalReturnPath();
 restoreSession().finally(() => render());

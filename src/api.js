@@ -77,6 +77,12 @@ export const ERROR_MESSAGES = {
   vendor_name_forbidden: "В названии нельзя указывать имя провайдера",
   use_integration_instances: "Обновите интерфейс — для ASR и TTS используйте список подключений",
   invalid_kind: "Неверный тип подключения",
+  email_not_verified: "Подтвердите email. Мы отправили письмо — проверьте почту.",
+  invalid_token: "Ссылка недействительна. Запросите новое письмо.",
+  token_expired: "Ссылка истекла. Запросите новое письмо.",
+  payment_unavailable: "Самопополнение временно недоступно",
+  payment_not_found: "Платёж не найден",
+  unknown_package: "Не удалось начать оплату",
 };
 
 export function hasApi() {
@@ -139,11 +145,13 @@ export async function login(loginName, password) {
   if (!res.ok) {
     const { code, details } = await readErrorBody(res);
     const mapped =
-      res.status === 401 || code === "invalid_credentials" || code === "auth_failed"
-        ? "invalid_credentials"
-        : code === "request_failed"
-          ? "server"
-          : code;
+      code === "email_not_verified"
+        ? "email_not_verified"
+        : res.status === 401 || code === "invalid_credentials" || code === "auth_failed"
+          ? "invalid_credentials"
+          : code === "request_failed"
+            ? "server"
+            : code;
     throw apiError(mapped, { details, status: res.status });
   }
   return res.json();
@@ -190,6 +198,61 @@ export async function fetchSession(session) {
     throw apiError("api_not_configured");
   }
   return apiFetch("/api/auth/session", { session });
+}
+
+export async function publicAuthFetch(path, { method = "POST", body } = {}) {
+  if (!API_BASE) {
+    throw apiError("api_not_configured");
+  }
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw apiError("request_failed");
+  }
+  if (!res.ok) {
+    const { code, details } = await readErrorBody(res);
+    throw apiError(code, { details, status: res.status });
+  }
+  if (res.status === 204) return null;
+  const ctype = res.headers.get("Content-Type") || "";
+  if (ctype.includes("application/json")) return res.json();
+  return res;
+}
+
+export async function registerAccount({ name, login, password }) {
+  return publicAuthFetch("/api/auth/register", { body: { name, login, password } });
+}
+
+export async function verifyEmail({ token }) {
+  return publicAuthFetch("/api/auth/verify-email", { body: { token } });
+}
+
+export async function resendVerification({ login }) {
+  return publicAuthFetch("/api/auth/resend-verification", { body: { login } });
+}
+
+export async function billingCheckout({ packageId, session, idempotencyKey }) {
+  const headers = {};
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+  return apiFetch("/api/cabinet/billing/checkout", {
+    method: "POST",
+    session,
+    body: { package_id: packageId },
+    headers,
+  });
+}
+
+export async function fetchBillingPackages(session) {
+  return apiFetch("/api/cabinet/billing/packages", { session });
+}
+
+export async function fetchPayment(paymentId, session) {
+  return apiFetch(`/api/cabinet/billing/payments/${encodeURIComponent(paymentId)}`, { session });
 }
 
 export async function apiFetch(path, { method = "GET", session, body, headers } = {}) {
