@@ -3873,19 +3873,10 @@ function stageKindBadge(kind) {
 }
 
 function clientPackGapsBlock(archetype, pack) {
-  if (archetype === "guide_task") {
-    const steps = pack?.steps;
-    if (!Array.isArray(steps) || !steps.length) {
-      return "Чтобы помочь в приложении, добавьте хотя бы один шаг";
-    }
-  }
-  if (archetype === "notify_support") {
-    const facts = pack?.facts;
-    const esc = pack?.escalation;
-    if (!Array.isArray(facts) || !facts.length || !Array.isArray(esc) || !esc.length) {
-      return "Добавьте факты уведомления и текст эскалации";
-    }
-  }
+  // FE-244 / ARCH-232: critical pack gaps become clarification questions after
+  // generate — do not block Save here.
+  void archetype;
+  void pack;
   return "";
 }
 
