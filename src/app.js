@@ -4151,12 +4151,12 @@ function sectionContacts(camp) {
   const uploadZone = `<div class="upload-zone upload-zone-dnd${contacts.length ? " upload-zone-quiet" : " upload-zone-empty"}${state.ui.contactsUploading ? " is-uploading" : ""}" id="upload-zone">
         <div class="upload-zone-main">
           <p class="upload-zone-title">${contacts.length ? "Догрузить файл" : "Перетащите CSV или Excel сюда"}</p>
-          <p class="hint">Форматы: .csv, .xlsx, .xls · нужен столбец с телефоном</p>
+          <p class="hint">Форматы: .csv, .xlsx · нужен столбец с телефоном</p>
           <div class="upload-zone-actions">
             <button class="btn${contacts.length ? " secondary" : ""}" type="button" id="pick-file" ${roAttr()}${state.ui.contactsUploading ? " disabled" : ""}>Выбрать файл</button>
             <a class="btn ghost" href="#" id="download-template" download="scorix-contacts-template.csv">Скачать шаблон</a>
           </div>
-          <input class="sr-file" type="file" id="contact-file" accept=".csv,.xlsx,.xls" tabindex="-1" aria-hidden="true" ${roAttr()} ${state.ui.contactsUploading ? "disabled" : ""} />
+          <input class="sr-file" type="file" id="contact-file" accept=".csv,.xlsx" tabindex="-1" aria-hidden="true" ${roAttr()} ${state.ui.contactsUploading ? "disabled" : ""} />
         </div>
         <details class="consent-disclosure"${state.ui.consentOpen ? " open" : ""}>
           <summary>Юридическое предупреждение</summary>
@@ -4602,7 +4602,7 @@ async function rowsFromFile(file) {
   if (lower.endsWith(".csv") || lower.endsWith(".txt")) {
     return parseCsvText(await file.text());
   }
-  if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
+  if (lower.endsWith(".xlsx")) {
     const XLSX = await loadXlsxLib();
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: "array" });
