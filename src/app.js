@@ -7143,6 +7143,11 @@ function bindCampaignForms() {
       );
       persistCampaigns();
       state.ui.clarifyPending = false;
+      try {
+        await refreshGates(camp);
+      } catch {
+        /* keep local clarifications_block_start */
+      }
       flash("Контекст обновлён");
       render();
     } catch (ex) {
