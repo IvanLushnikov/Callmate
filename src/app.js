@@ -296,6 +296,7 @@ const state = {
     contactOutcomeFilter: "all",
     generatePending: false,
     generateError: null,
+    clarifyPending: false,
     newCampaignDraft: { name: "", goal: "", details: "", archetype: "", archetype_locked: false, knowledge_pack: {} },
     newCampaignError: null,
     saveRebuildOpen: false,
@@ -1981,6 +1982,9 @@ function emptyCampaign(partial = {}) {
     archetype_locked: false,
     knowledge_pack: {},
     generate_warnings: [],
+    clarification_questions: [],
+    clarifications_block_start: false,
+    clarification_context_added: [],
     preview: { greeting: "", says: "", replies: "", tone: "" },
     scenarioText: "",
     stages: [],
@@ -2038,6 +2042,11 @@ function mapCampaignFromApi(c, existing = {}) {
       archetype_locked: c.archetype_locked != null ? Boolean(c.archetype_locked) : false,
       knowledge_pack: c.knowledge_pack && typeof c.knowledge_pack === "object" ? c.knowledge_pack : {},
       generate_warnings: Array.isArray(c.generate_warnings) ? c.generate_warnings : [],
+      clarification_questions: Array.isArray(c.clarification_questions) ? c.clarification_questions : [],
+      clarifications_block_start: Boolean(c.clarifications_block_start),
+      clarification_context_added: Array.isArray(c.clarification_context_added)
+        ? c.clarification_context_added
+        : [],
       analytics: null,
       voice_profile_id: c.voice_profile_id != null ? c.voice_profile_id : existing.voice_profile_id ?? null,
     });
@@ -2067,6 +2076,16 @@ function mapCampaignFromApi(c, existing = {}) {
     generate_warnings: Array.isArray(c.generate_warnings)
       ? c.generate_warnings
       : existing.generate_warnings || [],
+    clarification_questions: Array.isArray(c.clarification_questions)
+      ? c.clarification_questions
+      : existing.clarification_questions || [],
+    clarifications_block_start:
+      c.clarifications_block_start != null
+        ? Boolean(c.clarifications_block_start)
+        : Boolean(existing.clarifications_block_start),
+    clarification_context_added: Array.isArray(c.clarification_context_added)
+      ? c.clarification_context_added
+      : existing.clarification_context_added || [],
     voice_profile_id: c.voice_profile_id != null ? c.voice_profile_id : existing.voice_profile_id ?? null,
   });
 }
@@ -2671,6 +2690,7 @@ function reasonJumpTarget(reason) {
   if (!reason) return null;
   if (reason.action === "contacts") return "sec-contacts";
   if (reason.action === "schedule") return "sec-schedule";
+  if (reason.action === "clarify") return "clarify-panel";
   if (reason.action === "tel") return "integrations";
   if (reason.weak) return "sec-preview";
   if (reason.money) return "account";
@@ -3620,6 +3640,8 @@ function blockScenarioFlow(camp, weak, started) {
     </header>
     <form class="preview-panel scenario-sheet-form" id="preview-form">
       ${scenarioStatusBanner(camp, { weak, started, pending, genErr, hasServerPreview })}
+      ${packGapsBanner(camp)}
+      ${clarificationPanelHtml(camp, { started })}
 
       <div class="form-zones">
         ${formZone("Цель и сведения", "", contextBlock, { id: "sec-context" })}
@@ -3790,6 +3812,58 @@ function packGapsBanner(camp) {
     html += `<div class="hint pack-gaps-warn" role="status">Не хватает данных для точного сценария: ${escapeHtml(warns.join("; "))}</div>`;
   }
   return html;
+}
+
+function clarificationPanelHtml(camp, { started = false } = {}) {
+  const questions = Array.isArray(camp?.clarification_questions) ? camp.clarification_questions : [];
+  const added = Array.isArray(camp?.clarification_context_added) ? camp.clarification_context_added : [];
+  if (!questions.length && !added.length) return "";
+  const dis = started || locked() || state.ui.clarifyPending ? "disabled" : "";
+  const softCount = questions.filter((q) => q?.skippable || q?.severity === "soft").length;
+  const questionsHtml = questions.length
+    ? `<ol class="clarify-list">${questions
+        .slice(0, 5)
+        .map((q, i) => {
+          const id = escapeHtml(q.id || `q${i}`);
+          const critical = q.severity === "critical";
+          const mark = critical ? "Нужно для запуска" : "Можно пропустить";
+          return `<li class="clarify-item" data-clarify-id="${id}">
+            <div class="clarify-item-head">
+              <label class="clarify-question" for="clarify-ans-${id}">${escapeHtml(q.text || "")}</label>
+              <span class="clarify-mark${critical ? " clarify-mark-critical" : ""}">${escapeHtml(mark)}</span>
+            </div>
+            <textarea id="clarify-ans-${id}" class="clarify-answer" rows="2" placeholder="Ваш ответ" data-clarify-id="${id}" data-critical="${critical ? "1" : "0"}" ${dis}></textarea>
+          </li>`;
+        })
+        .join("")}</ol>`
+    : "";
+  const addedHtml = added.length
+    ? `<div class="clarify-added" role="status">
+        <p class="clarify-added-title">Контекст обновлён</p>
+        <ul>${added.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>
+      </div>`
+    : "";
+  const actions =
+    questions.length && !started && !locked()
+      ? `<div class="clarify-actions">
+          <button class="btn" type="button" id="clarify-save" ${dis}>Сохранить ответы</button>
+          ${
+            softCount
+              ? `<button class="btn secondary" type="button" id="clarify-skip-soft" ${dis}>Пропустить необязательные</button>`
+              : ""
+          }
+          <p class="hint" id="clarify-status" ${state.ui.clarifyPending ? "" : "hidden"}>${
+            state.ui.clarifyPending ? "Сохраняем…" : ""
+          }</p>
+        </div>`
+      : "";
+  return `<div class="clarify-panel" id="clarify-panel" role="region" aria-labelledby="clarify-title">
+    <h3 class="clarify-title" id="clarify-title">Перед обзвоном уточним</h3>
+    <p class="hint clarify-sub">Коротко — чтобы робот говорил точнее. Не больше пяти вопросов</p>
+    ${addedHtml}
+    ${questionsHtml}
+    ${actions}
+  </div>`;
 }
 
 function stageKindBadge(kind) {
@@ -4345,7 +4419,12 @@ function launchBlockReasons(camp) {
       reasons.push({
         text: gateReasonText(err),
         code,
-        action: code === "missing_attr_values" || code === "missing_columns" ? "contacts" : undefined,
+        action:
+          code === "missing_attr_values" || code === "missing_columns"
+            ? "contacts"
+            : code === "clarifications_required"
+              ? "clarify"
+              : undefined,
         hint:
           code === "missing_attr_values"
             ? "Откройте номер и заполните поле — или догрузите файл"
@@ -4362,6 +4441,13 @@ function launchBlockReasons(camp) {
   if (missingCol) reasons.push({ text: "В файле нет столбца для поля сценария" });
   const emptyAttr = (camp.uploadWarnings || []).find((w) => w.includes("пустое поле") || w.includes("нет значения"));
   if (emptyAttr) reasons.push({ text: "У части номеров нет значения поля из сценария" });
+  if (camp.clarifications_block_start) {
+    reasons.push({
+      text: "Сначала ответьте на обязательные уточнения",
+      code: "clarifications_required",
+      action: "clarify",
+    });
+  }
   if (state.telephony.status !== "ok") reasons.push({ text: "Подключите телефонию", action: "tel" });
   if (!camp.schedule?.days?.length || !camp.schedule?.tz) reasons.push({ text: "Задайте расписание", action: "schedule" });
   if (
@@ -7011,6 +7097,73 @@ function bindCampaignForms() {
         return;
       }
       await performPreviewSave(camp, payload);
+    };
+  }
+
+  async function submitClarificationAnswers({ skipSoft = false } = {}) {
+    const camp = workspaceCampaign();
+    if (!camp || isStarted(camp) || locked() || state.ui.clarifyPending) return;
+    const questions = Array.isArray(camp.clarification_questions) ? camp.clarification_questions : [];
+    const answers = [];
+    for (const q of questions.slice(0, 5)) {
+      const el = document.querySelector(`.clarify-answer[data-clarify-id="${CSS.escape(q.id)}"]`);
+      const text = el ? String(el.value || "").trim() : "";
+      const critical = q.severity === "critical";
+      if (critical && !text && !skipSoft) {
+        flash("Ответьте на обязательные уточнения", "error");
+        el?.focus();
+        return;
+      }
+      if (text) answers.push({ id: q.id, text });
+      else if (q.skippable || q.severity === "soft") answers.push({ id: q.id, skip: true });
+    }
+    if (!hasApi()) {
+      flash("Укажите адрес API", "error");
+      return;
+    }
+    state.ui.clarifyPending = true;
+    render();
+    try {
+      const updated = await apiFetch(
+        `/api/cabinet/campaigns/${encodeURIComponent(camp.id)}/clarifications/answers`,
+        {
+          method: "POST",
+          session: state.session,
+          body: { answers, skip_soft: Boolean(skipSoft) },
+        }
+      );
+      Object.assign(
+        camp,
+        mapCampaignFromApi(updated, {
+          name: camp.name,
+          contacts: camp.contacts,
+          columns: camp.columns,
+          analytics: camp.analytics,
+        })
+      );
+      persistCampaigns();
+      state.ui.clarifyPending = false;
+      flash("Контекст обновлён");
+      render();
+    } catch (ex) {
+      state.ui.clarifyPending = false;
+      flash(errorMessage(ex?.code) || "Не удалось сохранить ответы. Попробуйте ещё раз", "error");
+      render();
+    }
+  }
+
+  const clarifySave = document.getElementById("clarify-save");
+  if (clarifySave) {
+    clarifySave.onclick = (e) => {
+      e.preventDefault();
+      submitClarificationAnswers({ skipSoft: false });
+    };
+  }
+  const clarifySkip = document.getElementById("clarify-skip-soft");
+  if (clarifySkip) {
+    clarifySkip.onclick = (e) => {
+      e.preventDefault();
+      submitClarificationAnswers({ skipSoft: true });
     };
   }
 

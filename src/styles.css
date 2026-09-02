@@ -4670,6 +4670,87 @@ label {
 .pack-gaps-warn {
   margin-top: 0.5rem;
 }
+
+.clarify-panel {
+  margin: var(--space-4) 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+}
+
+.clarify-title {
+  font-family: var(--display);
+  font-size: 1.15rem;
+  margin: 0 0 var(--space-2);
+}
+
+.clarify-sub {
+  margin: 0 0 var(--space-3);
+}
+
+.clarify-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.clarify-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.clarify-question {
+  font-weight: 600;
+  margin: 0;
+}
+
+.clarify-mark {
+  font-size: 0.85rem;
+  color: var(--muted, #667);
+}
+
+.clarify-mark-critical {
+  color: var(--warn, #a65b00);
+}
+
+.clarify-answer {
+  width: 100%;
+  min-height: 2.75rem;
+}
+
+.clarify-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.clarify-added {
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  background: var(--ok-soft, rgba(40, 140, 80, 0.08));
+  border-radius: var(--radius, 8px);
+}
+
+.clarify-added-title {
+  margin: 0 0 var(--space-2);
+  font-weight: 600;
+}
+
+.clarify-added ul {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
 .contact-insights {
   margin: 0.75rem 0;
 }
