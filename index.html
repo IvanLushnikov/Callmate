@@ -15,11 +15,16 @@
   <body>
     <div id="app"></div>
     <script>
-      // Production API. On localhost use same-origin proxy (scripts/dev-server.py).
+      // GitHub Pages demo → Render API. Любой свой домен → same origin (/api).
       (function () {
         var host = location.hostname;
-        var local = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-        window.SCORIX_API_BASE = local ? location.origin : "https://callmate-api.onrender.com";
+        var local =
+          host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+        var githubPages = host.endsWith(".github.io");
+        window.SCORIX_API_BASE =
+          local || !githubPages
+            ? location.origin
+            : "https://callmate-api.onrender.com";
       })();
     </script>
     <script type="module" src="./src/app.js"></script>
