@@ -102,18 +102,34 @@ function routeQuery() {
   return new URLSearchParams(path.slice(q + 1));
 }
 
+function cabinetBasePath() {
+  if (typeof window !== "undefined" && typeof window.SCORIX_BASE_PATH === "string") {
+    return window.SCORIX_BASE_PATH;
+  }
+  if (typeof location === "undefined") return "";
+  const m = (location.pathname || "/").match(/^(\/lk)(?:\/|$)/);
+  return m ? m[1] : "";
+}
+
+function cabinetAbsoluteUrl(hashPath) {
+  const base = cabinetBasePath();
+  const hash = hashPath.startsWith("#") ? hashPath : `#${hashPath}`;
+  const origin = typeof location !== "undefined" ? location.origin : "";
+  return `${origin}${base}/${hash}`;
+}
+
 function normalizeExternalReturnPath() {
   if (typeof location === "undefined") return;
   const billing = location.pathname.match(/\/billing\/return\/?$/);
   if (billing) {
     const qs = location.search || "";
-    history.replaceState(null, "", `${location.origin}/#/billing/return${qs}`);
+    history.replaceState(null, "", cabinetAbsoluteUrl(`#/billing/return${qs}`));
     return;
   }
   const verify = location.pathname.match(/\/verify-email\/?$/);
   if (verify) {
     const qs = location.search || "";
-    history.replaceState(null, "", `${location.origin}/#/verify${qs}`);
+    history.replaceState(null, "", cabinetAbsoluteUrl(`#/verify${qs}`));
   }
 }
 
