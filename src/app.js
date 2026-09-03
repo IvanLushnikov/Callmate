@@ -601,7 +601,7 @@ function launchChecklist(camp) {
     },
     {
       id: "telephony",
-      label: "Телефония подключена",
+      label: "SIP сохранён и проверен",
       ok: telOk && schOk,
       action: telOk ? (schOk ? "" : "Задать расписание") : "Настроить",
       jump: telOk ? "sec-schedule" : "integrations",
@@ -1230,7 +1230,7 @@ const ADMIN_LLM_KINDS = [
   {
     kind: "llm_voice",
     title: "LLM для голоса",
-    hint: "Ответы робота на линии",
+    hint: "Модель для ответов в голосовом контуре (на учебной линии — учебные ответы)",
     modelLabel: "Модель",
   },
 ];
@@ -2690,12 +2690,14 @@ function blockCampaignAnalytics(camp) {
   }
   const calls = a?.calls ?? a?.calls_total ?? 0;
   const reached = a?.goalReached ?? a?.goal_reached ?? 0;
+  const completed = a?.completedTopics ?? a?.completed_topics ?? 0;
   const cost = analyticsCostFromSummary(a);
   const avgDuration = a?.avgDuration ?? formatAnalyticsDuration(a?.avg_duration_sec);
   const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
   return `<div class="metrics-grid metrics-grid-4">
       ${analyticsMetric("Звонков", calls)}
-      ${analyticsMetric("Дозвоны / целевые", `${reached}`, "Итоги по цели")}
+      ${analyticsMetric("Завершённые", completed, "Дозвонились и поговорили")}
+      ${analyticsMetric("До цели", reached, "По вердикту цели")}
       ${analyticsMetric("Конверсия", conv)}
       ${analyticsMetric("Средняя длительность", avgDuration || "—")}
       ${analyticsMetric("Стоимость", cost != null ? `${cost} ₽` : "—", analyticsTariffHint(a))}
@@ -2707,18 +2709,30 @@ function blockCampaignAnalytics(camp) {
     </div>`;
 }
 
+function telephonyHonestOkLabel({ withLines = false } = {}) {
+  const mode = runtimeDialMode();
+  const base =
+    mode === "live_sip"
+      ? "SIP проверен"
+      : mode === "stub"
+        ? "Данные SIP сохранены (учебный режим)"
+        : "Данные SIP сохранены";
+  if (withLines && state.telephony.lines != null) {
+    return `${base} · линий: ${state.telephony.lines}`;
+  }
+  return base;
+}
+
 function telephonyStatusLine() {
   const t = state.telephony;
   if (t.checking) return "Проверяем подключение…";
   if (t.status === "ok") {
-    return t.lines != null
-      ? `Телефония подключена · линий: ${t.lines}`
-      : "Телефония подключена";
+    return telephonyHonestOkLabel({ withLines: true });
   }
   if (t.status === "error") {
     return telephonyErrorText(t.lastError);
   }
-  return "Телефония не подключена";
+  return "Телефония не настроена";
 }
 
 function scheduleIsSet(camp) {
@@ -2786,8 +2800,8 @@ function readinessStripHtml(camp) {
   const telLabel = t.checking
     ? "Проверяем…"
     : telOk
-      ? "Подключена"
-      : "Не подключена";
+      ? "Сохранена и проверена"
+      : "Не настроена";
 
   const schOk = scheduleIsSet(camp);
   const schStatus = schOk ? "Настроено" : "Не задано";
@@ -2817,11 +2831,11 @@ function readinessStripHtml(camp) {
   let readyClass = "ready-ok";
   if (camp.dial_state === "running") {
     readyTitle = "Идёт обзвон";
-    readyBody = `<p class="ready-hint">Текущий разговор закончим. Новые не начнём</p>`;
+    readyBody = `<p class="ready-hint">Попытки идут по очереди сервера</p>`;
     readyClass = "ready-ok";
   } else if (camp.dial_state === "paused") {
     readyTitle = "На паузе";
-    readyBody = `<p class="ready-hint">Текущий разговор закончим. Новые не начнём</p>`;
+    readyBody = `<p class="ready-hint">Новые наборы не стартуют. Текущая попытка доработает по правилам сервера</p>`;
     readyClass = "ready-warn";
   } else if (!canLaunch) {
     readyTitle = reasons.length ? "Нельзя запустить" : "Запуск";
@@ -3016,7 +3030,7 @@ function blockCampaignPurge(camp) {
   const disabled = running || locked() || state.ui.purgeDataPending;
   const titleAttr = running ? ` title="Сначала остановите обзвон"` : "";
   return `<div class="campaign-danger-row" id="sec-campaign-purge">
-    <p class="hint">Номера и записи разговоров можно удалить раньше обычного срока хранения.</p>
+    <p class="hint">Контакты, попытки и вердикты можно удалить. Аудиозаписей в кабинете нет.</p>
     <button class="btn ghost danger-ghost" type="button" id="purge-data-open" ${disabled ? "disabled" : ""}${titleAttr} ${roAttr()}>Удалить данные кампании</button>
     ${running ? `<p class="hint">Сначала остановите обзвон</p>` : ""}
   </div>`;
@@ -3028,7 +3042,7 @@ function purgeDataModalHtml(camp) {
   return `<div class="modal-backdrop" id="purge-data-backdrop" role="presentation">
     <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="purge-data-title">
       <h3 id="purge-data-title">Удалить данные кампании?</h3>
-      <p>Удалим все контакты этой кампании, записи разговоров и вердикты. Цель и сценарий останутся. Восстановить данные нельзя.</p>
+      <p>Удалим все контакты этой кампании, попытки и вердикты. Аудиозаписей в кабинете нет. Цель и сценарий останутся. Восстановить данные нельзя.</p>
       <div class="error" id="purge-data-error" hidden></div>
       <div class="row-actions">
         <button class="btn secondary" type="button" id="purge-data-cancel" ${pending ? "disabled" : ""} autofocus>Отмена</button>
@@ -3059,10 +3073,10 @@ function blockTestingSection(camp) {
           </div>
           ${isWeakScenario(camp) ? `<p class="hint testing-warn">⚠ Сценарий пока слабый — допишите цель и сведения</p>` : ""}
           <div class="row-actions">
-            <button class="btn secondary" type="button" disabled title="Тестовый звонок скоро">Тестовый звонок</button>
+            <button class="btn secondary" type="button" disabled title="Тестовый звонок пока недоступен">Тестовый звонок</button>
             <button class="btn ghost" type="button" data-workspace-tab="scenario">Редактировать сценарий</button>
           </div>
-          <p class="hint">Тестовый звонок и симуляция диалога появятся после подключения backend.</p>`
+          <p class="hint">Тестовый звонок пока недоступен.</p>`
         : `<p class="hint">Сначала сохраните цель и сведения — затем можно будет протестировать сценарий.</p>`
     }
   </section>`;
@@ -3078,14 +3092,15 @@ function blockCallProgress(camp) {
   const prog = contactPipelineStats(camp);
   const a = camp.analytics || {};
   const calls = a.calls ?? a.calls_total ?? prog.called;
-  const reached = a.goalReached ?? a.goal_reached ?? prog.done;
+  const completed = a.completedTopics ?? a.completed_topics ?? prog.done;
+  const reached = a.goalReached ?? a.goal_reached ?? 0;
   const conv = calls > 0 ? `${Math.round((reached / calls) * 100)}%` : "—";
   const cost = analyticsCostFromSummary(a);
   const funnel = `<div class="call-funnel" role="img" aria-label="Воронка результатов">
     <div class="funnel-step"><span class="funnel-value">${prog.inQueue}</span><span class="funnel-label">В очереди</span></div>
     <div class="funnel-step"><span class="funnel-value">${calls}</span><span class="funnel-label">Звонков</span></div>
-    <div class="funnel-step funnel-step--ok"><span class="funnel-value">${reached}</span><span class="funnel-label">Дозвоны</span></div>
-    <div class="funnel-step funnel-step--ok"><span class="funnel-value">${reached}</span><span class="funnel-label">Целевые</span></div>
+    <div class="funnel-step funnel-step--ok"><span class="funnel-value">${completed}</span><span class="funnel-label">Завершённые</span></div>
+    <div class="funnel-step funnel-step--ok"><span class="funnel-value">${reached}</span><span class="funnel-label">До цели</span></div>
     <div class="funnel-step funnel-step--muted"><span class="funnel-value">${prog.noAnswer}</span><span class="funnel-label">Недозвон</span></div>
   </div>`;
   const recent = (camp.contacts || [])
@@ -3126,14 +3141,14 @@ function blockCallQuality(camp) {
   if (!hasCampaignCalls(camp)) {
     return `<section class="quality-block quality-block--empty">
       <h3 class="quality-title">Качество звонков</h3>
-      <p class="hint">После звонков здесь будут записи, транскрипты и AI-резюме. Флаги качества — после подключения backend.</p>
+      <p class="hint">После разговора здесь будут транскрипт и вердикт. Записей аудио и AI-резюме в первой версии нет.</p>
     </section>`;
   }
   const withTranscript = (camp.contacts || []).filter((c) => c.last_transcript || c.transcript).slice(0, 6);
   if (!withTranscript.length) {
     return `<section class="quality-block quality-block--empty">
       <h3 class="quality-title">Качество звонков</h3>
-      <p class="hint">Транскрипты и записи появятся после звонков с разговором.</p>
+      <p class="hint">Транскрипты появятся после разговора. Записей аудио в кабинете нет.</p>
     </section>`;
   }
   const rows = withTranscript
@@ -3180,7 +3195,7 @@ function blockBusinessOutcomes(camp) {
       <thead><tr><th>Итог</th><th>Кол-во</th><th>Доля</th><th>Изменение</th><th>Действие</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <p class="hint">Интеграции с CRM и webhook — когда backend будет готов.</p>
+    <p class="hint">Интеграции с CRM и webhook в кабинете пока нет.</p>
   </section>`;
 }
 
@@ -3323,7 +3338,7 @@ function campaignWorkspace(camp) {
       ${workspaceTabsHtml(tab)}
     </div>
     <div id="stop-confirm" class="panel nested" hidden>
-      <p>Остановить обзвон? Текущий разговор договорим</p>
+      <p>Остановить обзвон? Новые наборы не стартуют. Текущая попытка доработает по правилам сервера</p>
       <div class="row-actions">
         <button class="btn" type="button" id="stop-yes">Стоп</button>
         <button class="btn secondary" type="button" id="stop-no">Отмена</button>
@@ -4018,16 +4033,18 @@ function sectionTelephony() {
   const statusTitle = t.checking
     ? "Проверяем подключение…"
     : telOk
-      ? "SIP подключён"
+      ? runtimeDialMode() === "live_sip"
+        ? "SIP проверен"
+        : "Данные SIP сохранены"
       : telWarn
-        ? "Не удалось подключить"
-        : "Телефония не подключена";
+        ? "Не удалось проверить SIP"
+        : "Телефония не настроена";
   const statusHint = t.checking
     ? "Это не обзвон — только проверка связи"
     : telOk
       ? t.lines != null
-        ? `Линий для обзвона: ${t.lines}`
-        : "Можно создавать кампанию и запускать обзвон"
+        ? `Линий для обзвона: ${t.lines}. Режим обзвона — в баннере сверху. Это не значит, что звонки уже идут людям.`
+        : "Режим обзвона — в баннере сверху. Это не значит, что звонки уже идут людям."
       : telWarn
         ? telephonyErrorText(t.lastError)
         : "Подключите SIP";
@@ -7748,7 +7765,7 @@ async function runSipCheck() {
     });
     if (result.connection_status === "ok") {
       state.ui.telephonyPanel = null;
-      flash("SIP подключён");
+      flash("Проверка SIP пройдена");
     } else {
       state.telephony.status = "error";
       state.telephony.lastError = result.error_code || "sip_unknown";
@@ -8536,7 +8553,7 @@ function bindLaunch() {
           session: state.session,
         });
         await refreshCampaignDialState(camp);
-        flash("На паузе. Текущий разговор закончим. Новые звонки не начнём");
+        flash("На паузе. Новые наборы не стартуют. Текущая попытка доработает по правилам сервера");
         ensureDialStatePoll();
         render();
       } catch (err) {
@@ -8589,7 +8606,7 @@ function bindLaunch() {
           session: state.session,
         });
         await refreshCampaignDialState(camp);
-        flash("Остановлен. Текущий разговор договорим");
+        flash("Остановлен. Новые наборы не стартуют. Текущая попытка доработает по правилам сервера");
         render();
       } catch (err) {
         flash(errorMessage(err?.code) || "Не удалось остановить", "error");
