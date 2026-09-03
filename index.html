@@ -15,16 +15,12 @@
   <body>
     <div id="app"></div>
     <script>
-      // GitHub Pages demo → Render API. Любой свой домен → same origin (/api).
+      // API base: same origin by default. Override with window.SCORIX_API_BASE before this
+      // script if the cabinet is hosted separately from the API (set CORS origins on the API).
+      // No hardcoded third-party Pages → prod API mapping.
       (function () {
-        var host = location.hostname;
-        var local =
-          host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-        var githubPages = host.endsWith(".github.io");
-        window.SCORIX_API_BASE =
-          local || !githubPages
-            ? location.origin
-            : "https://callmate-api.onrender.com";
+        if (window.SCORIX_API_BASE) return;
+        window.SCORIX_API_BASE = location.origin;
       })();
     </script>
     <script type="module" src="./src/app.js"></script>

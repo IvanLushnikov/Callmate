@@ -14,6 +14,7 @@ import {
   fetchBillingPackages,
   fetchPayment,
 } from "./api.js";
+import { otpauthQrDataUrl } from "./lib/totp-qr.js";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -199,7 +200,10 @@ function purgeServerBackedLocalCache() {
 
 if (hasApi()) purgeServerBackedLocalCache();
 
-/** Session bearer is a secret (ARCH-108): sessionStorage only, never localStorage. */
+/** Session bearer is a secret (ARCH-108): sessionStorage only, never localStorage.
+ * TODO(security): full HttpOnly cookie session needs BE+SPA contract change — anti-scope for now.
+ * Keep XSS surface tight: never interpolate the token into HTML; prefer textContent for errors.
+ */
 function readSessionToken() {
   try {
     const fromSession = sessionStorage.getItem("scx_session") || "";
@@ -1109,8 +1113,10 @@ function adminSettings() {
     </div>`;
   } else if (totp.enabled === false && totp.setup) {
     const uri = totp.setup.otpauth_uri || "";
-    const qr = uri
-      ? `<img class="totp-qr" alt="QR для приложения аутентификации" width="180" height="180" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&amp;data=${encodeURIComponent(uri)}" />`
+    // Render QR locally — do not POST otpauth URI to third-party QR APIs.
+    const qrDataUrl = uri ? otpauthQrDataUrl(uri, 180) : "";
+    const qr = qrDataUrl
+      ? `<img class="totp-qr" alt="QR для приложения аутентификации" width="180" height="180" src="${qrDataUrl}" />`
       : "";
     totpPanel = `<div class="panel" style="margin-top:1rem">
       <h3>Подключение 2FA</h3>
@@ -5524,6 +5530,10 @@ async function hmacSha256Hex(secret, message) {
 }
 
 async function simulateStubPaymentSuccess(paymentId) {
+  // Dev/localhost only — dead on Pages/prod even if SCORIX_DEV_WEBHOOK_SECRET is injected.
+  if (!isDevEnvironment()) {
+    throw Object.assign(new Error("dev_only"), { code: "forbidden" });
+  }
   if (!hasApi()) {
     navigate(`/billing/return?payment_id=${encodeURIComponent(paymentId)}`);
     return;
@@ -6317,6 +6327,7 @@ function bindAdminTotp() {
         state.adminTotp.enabled = true;
         state.adminTotp.setup = null;
         state.adminTotp.recoveryCodes = data.recovery_codes || [];
+        // Secret must not linger in SPA state after enrollment.
         state.adminTotp.busy = false;
         render();
       } catch (ex) {
