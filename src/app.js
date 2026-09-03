@@ -3158,14 +3158,18 @@ function blockCallQuality(camp) {
     </section>`;
   }
   const rows = withTranscript
-    .map(
-      (c) => `<tr>
+    .map((c) => {
+      const verdictLabel = contactVerdictDisplay(camp, c);
+      const outcomeText = verdictLabel
+        ? verdictLabel + (c.verdict_reason ? ` — ${c.verdict_reason}` : "")
+        : contactVerdictEmptyText(c);
+      return `<tr>
       <td>${escapeHtml(maskPhone(c.phone))}</td>
-      <td>${escapeHtml(c.verdict || statusLabel(c.status))}</td>
+      <td>${escapeHtml(outcomeText)}</td>
       <td class="quality-transcript">${escapeHtml((c.last_transcript || c.transcript || "").slice(0, 80))}…</td>
       <td><button class="btn ghost" type="button" disabled title="Скоро">Проверить</button></td>
-    </tr>`
-    )
+    </tr>`;
+    })
     .join("");
   return `<section class="quality-block" id="sec-quality">
     <h3 class="quality-title">Качество звонков</h3>
@@ -4151,6 +4155,7 @@ function mapContactListItem(item) {
     status: item.status || STATUS.in_progress,
     attrs: item.attrs || {},
     verdict: item.verdict ?? null,
+    verdict_reason: item.verdict_reason ?? null,
     attempt_count: item.attempt_count ?? 0,
     last_transcript: item.last_transcript ?? null,
     attempts: item.attempts || (item.last_attempt ? [item.last_attempt] : []),
@@ -4599,6 +4604,33 @@ function contactAttrsFormHtml(camp, contact) {
   </form>`;
 }
 
+function contactVerdictDisplay(camp, contact) {
+  const id = contact?.verdict;
+  if (!id) return null;
+  const list = verdictsForDisplay(camp) || [];
+  for (const v of list) {
+    if (typeof v === "string") {
+      if (v === id) return v;
+    } else if (v && (v.id === id || v.verdict_id === id)) {
+      return v.label || v.id || id;
+    }
+  }
+  return id;
+}
+
+function contactTalked(contact) {
+  if (!contact) return false;
+  if (contact.last_transcript || contact.transcript) return true;
+  if (contact.status === STATUS.done) return true;
+  return false;
+}
+
+function contactVerdictEmptyText(contact) {
+  return contactTalked(contact)
+    ? "Не удалось определить итог"
+    : "Вердикта нет — разговора не было";
+}
+
 function contactDrawerHtml(camp, contact) {
   const attempts = contact.attempts || [];
   const attemptRows = attempts.length
@@ -4619,15 +4651,22 @@ function contactDrawerHtml(camp, contact) {
   const lastOutcome = contact.last_attempt_outcome
     ? `<p><strong>Исход</strong>: ${escapeHtml(outcomeLabel(contact.last_attempt_outcome))}</p>`
     : "";
+  const verdictLabel = contactVerdictDisplay(camp, contact);
+  const verdictBlock = verdictLabel
+    ? `<p><strong>Вердикт</strong>: ${escapeHtml(verdictLabel)}</p>
+       ${
+         contact.verdict_reason
+           ? `<p><strong>Как прошло</strong>: ${escapeHtml(contact.verdict_reason)}</p>`
+           : ""
+       }`
+    : `<p><strong>Вердикт</strong>: ${escapeHtml(contactVerdictEmptyText(contact))}</p>`;
   return `<div class="panel nested contact-drawer">
     <h3>Номер</h3>
     <p>${escapeHtml(maskPhone(contact.phone))}</p>
     <p><strong>Статус</strong>: ${escapeHtml(statusLabel(contact.status))}
       ${contact.status === STATUS.done ? `<span class="hint">Поговорили с человеком</span>` : ""}</p>
     ${lastOutcome}
-    <p><strong>Вердикт</strong>: ${
-      contact.verdict ? escapeHtml(contact.verdict) : "Вердикта нет — разговора не было"
-    }</p>
+    ${verdictBlock}
     <p class="hint">Вердикт — про цель кампании, не про статус</p>
     ${
       contact.insights_summary
@@ -8653,12 +8692,14 @@ function bindStatuses() {
             Object.assign(ct, {
               status: card.status || ct.status,
               verdict: card.verdict ?? null,
+              verdict_reason: card.verdict_reason ?? null,
               attrs: card.attrs || ct.attrs,
               attempt_count: card.attempt_count ?? ct.attempt_count,
               attempts: card.attempts || ct.attempts || [],
               last_transcript: card.last_transcript ?? ct.last_transcript,
               transcript: card.last_transcript || card.transcript || ct.transcript,
               last_attempt_outcome: card.last_attempt_outcome ?? ct.last_attempt_outcome,
+              insights_summary: card.insights_summary ?? ct.insights_summary,
             });
             persistCampaigns();
           } catch (ex) {
