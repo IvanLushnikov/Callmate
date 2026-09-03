@@ -16,15 +16,12 @@
         var path = location.pathname || "/";
         var m = path.match(/^(\/lk)(?:\/|$)/);
         window.SCORIX_BASE_PATH = m ? m[1] : "";
-        var host = location.hostname;
-        var local =
-          host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-        var githubPages = host.endsWith(".github.io");
-        // GitHub Pages demo → Render API. Свой домен (в т.ч. /lk) → same origin.
-        window.SCORIX_API_BASE =
-          local || !githubPages
-            ? location.origin
-            : "https://callmate-api.onrender.com";
+        // API base: same origin by default. Override with window.SCORIX_API_BASE before this
+        // script if the cabinet is hosted separately from the API (set CORS origins on the API).
+        // No hardcoded third-party Pages → prod API mapping.
+        if (!window.SCORIX_API_BASE) {
+          window.SCORIX_API_BASE = location.origin;
+        }
         var assetBase = window.SCORIX_BASE_PATH || ".";
         var link = document.createElement("link");
         link.rel = "stylesheet";
