@@ -46,6 +46,8 @@ const ERROR_BY_CODE = {
   sip_unknown: "Не удалось проверить SIP. Попробуйте позже",
   provider_down: "Телефония временно недоступна на сервере",
   telephony_not_ready: "Сначала сохраните настройки SIP",
+  voice_not_ready: "Речь на сервере ещё не настроена — запуск недоступен",
+  voice_hybrid_blocked: "Сейчас только учебная речь при живом SIP. Для запуска нужен полный живой режим или разрешение гибрида",
 };
 
 function telephonyErrorText(code) {
@@ -814,19 +816,38 @@ function impersonateBanner() {
   </div>`;
 }
 
-/** Server/runtime dial mode — stub vs live_sip (wave 3 honesty). */
+/** Server/runtime call mode — ARCH-244 / FE-244 honesty. */
 function runtimeDialMode() {
   if (!isApiOnline()) return "offline";
   return state.runtime?.dial_mode || state.runtime?.adapters?.telephony || "unknown";
 }
 
+function runtimeCallMode() {
+  if (!isApiOnline()) return "offline";
+  const mode = state.runtime?.call_mode;
+  if (mode === "stub" || mode === "hybrid" || mode === "not_ready" || mode === "live") {
+    return mode;
+  }
+  // Legacy API: only dial_mode
+  const dial = runtimeDialMode();
+  if (dial === "live_sip") return "hybrid";
+  if (dial === "stub") return "stub";
+  return "unknown";
+}
+
 function runtimeModeBadgeHtml() {
-  const mode = runtimeDialMode();
+  const mode = runtimeCallMode();
   if (mode === "offline") {
     return `<span class="runtime-mode-badge runtime-mode-badge--offline" data-testid="runtime-mode-badge" title="Нет подключения к серверу">Без сервера</span>`;
   }
-  if (mode === "live_sip") {
-    return `<span class="runtime-mode-badge runtime-mode-badge--live" data-testid="runtime-mode-badge" title="Worker набирает через SIP">Живой обзвон</span>`;
+  if (mode === "live") {
+    return `<span class="runtime-mode-badge runtime-mode-badge--live" data-testid="runtime-mode-badge" title="Линия и речь робота настоящие">Живой обзвон</span>`;
+  }
+  if (mode === "hybrid") {
+    return `<span class="runtime-mode-badge runtime-mode-badge--hybrid" data-testid="runtime-mode-badge" title="SIP живой, речь учебная">SIP живой, речь учебная</span>`;
+  }
+  if (mode === "not_ready") {
+    return `<span class="runtime-mode-badge runtime-mode-badge--warn" data-testid="runtime-mode-badge" title="Нужны ключи и адреса речи на сервере">Речь не настроена</span>`;
   }
   if (mode === "stub") {
     return `<span class="runtime-mode-badge runtime-mode-badge--stub" data-testid="runtime-mode-badge" title="Звонки имитируются, реального дозвона нет">Учебный обзвон</span>`;
@@ -835,7 +856,7 @@ function runtimeModeBadgeHtml() {
 }
 
 function dialModeBannerHtml() {
-  const mode = runtimeDialMode();
+  const mode = runtimeCallMode();
   if (mode === "offline") {
     return `<div class="banner banner-warn dial-mode-banner" data-testid="dial-mode-banner" role="status">
       <strong>Кабинет без сервера</strong>
@@ -848,10 +869,22 @@ function dialModeBannerHtml() {
       <p class="hint">Реального дозвона нет. Статусы и транскрипты учебные.</p>
     </div>`;
   }
-  if (mode === "live_sip") {
+  if (mode === "hybrid") {
+    return `<div class="banner banner-warn dial-mode-banner" data-testid="dial-mode-banner" role="status">
+      <strong>Линия через SIP живая, речь робота учебная</strong>
+      <p class="hint">Настоящий разговор будет после настройки распознавания, голоса и нейросети на сервере.</p>
+    </div>`;
+  }
+  if (mode === "not_ready") {
+    return `<div class="banner banner-warn dial-mode-banner" data-testid="dial-mode-banner" role="status">
+      <strong>Живой режим включён, но речь не настроена</strong>
+      <p class="hint">Задайте ключи и адреса на сервере — иначе разговор не взлетит.</p>
+    </div>`;
+  }
+  if (mode === "live") {
     return `<div class="banner banner-info dial-mode-banner" data-testid="dial-mode-banner" role="status">
-      <strong>Живые звонки через ваш SIP</strong>
-      <p class="hint">Worker набирает через вашу АТС. Результаты — с сервера.</p>
+      <strong>Живые звонки: линия и речь настоящие</strong>
+      <p class="hint">Worker звонит через вашу АТС, робот слышит и говорит по-настоящему.</p>
     </div>`;
   }
   return "";

@@ -795,6 +795,12 @@ form.panel > .btn,
   background: color-mix(in srgb, var(--ok) 12%, var(--surface));
   color: var(--text);
 }
+.runtime-mode-badge--hybrid,
+.runtime-mode-badge--warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: var(--warn-soft);
+  color: var(--text);
+}
 .runtime-mode-badge--offline {
   border-color: color-mix(in srgb, var(--muted) 35%, var(--line));
   background: var(--surface-2);
