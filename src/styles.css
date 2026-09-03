@@ -3688,6 +3688,42 @@ button.linkish:hover { text-decoration: underline; }
 }
 
 @media (max-width: 640px) {
+  .page-shell--admin-integrations .page-topbar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    width: 100%;
+  }
+
+  .page-shell--admin-integrations .page-topbar .brand {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .page-shell--admin-integrations .page-topbar-actions {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: stretch;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .page-shell--admin-integrations .page-topbar-actions .theme-segmented,
+  .page-shell--admin-integrations .page-topbar-actions .theme-switch {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .page-shell--admin-integrations .page-topbar .app-tabs {
+    grid-column: 1;
+    grid-row: 3;
+    min-width: 0;
+    max-width: 100%;
+  }
+
   .ready-strip {
     grid-template-columns: 1fr;
   }
@@ -4628,4 +4664,242 @@ label {
 }
 .contact-insights {
   margin: 0.75rem 0;
+}
+
+/* FE-190 — superadmin provider integrations */
+.admin-integrations-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s4);
+  align-items: start;
+}
+
+.integration-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-width: 0;
+}
+
+.integration-card-head,
+.integration-revision-head,
+.integration-check,
+.integration-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.integration-card-head {
+  align-items: flex-start;
+}
+
+.integration-card-head h3,
+.integration-card-head p,
+.integration-revision h4,
+.integration-config-form h4,
+.integration-secret-form h4 {
+  margin: 0;
+}
+
+.integration-card-head .hint {
+  margin-top: 0.2rem;
+}
+
+.integration-revisions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s2);
+}
+
+.integration-revision {
+  min-width: 0;
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.integration-revision--empty {
+  border-style: dashed;
+}
+
+.integration-revision--empty .hint {
+  margin: var(--s2) 0 0;
+}
+
+.integration-details,
+.integration-catalog {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, auto) minmax(0, 1fr);
+  gap: 0.35rem var(--s2);
+  margin: var(--s3) 0 0;
+  font-size: 0.86rem;
+}
+
+.integration-details dt,
+.integration-catalog dt {
+  color: var(--muted);
+}
+
+.integration-details dd,
+.integration-catalog dd {
+  min-width: 0;
+  margin: 0;
+  font-weight: 600;
+}
+
+.integration-value-break,
+.integration-feedback,
+.integration-load-error,
+.integration-provider-unavailable,
+.integration-no-secret,
+.integration-empty-state {
+  overflow-wrap: anywhere;
+}
+
+.integration-check {
+  align-items: flex-start;
+  flex-direction: column;
+  margin-top: var(--s3);
+}
+
+.integration-status,
+.integration-tag {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.integration-status--ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+
+.integration-status--error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+
+.integration-status--neutral,
+.integration-tag {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.integration-config-form,
+.integration-secret-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+.integration-field {
+  min-width: 0;
+}
+
+.integration-field label {
+  display: block;
+  margin-bottom: 0.3rem;
+}
+
+.integration-field input,
+.integration-field select {
+  width: 100%;
+  min-width: 0;
+}
+
+.integration-config-form .hint,
+.integration-secret-form .hint {
+  margin: 0;
+}
+
+.integration-config-form > .btn,
+.integration-secret-form > .btn,
+.integration-card-actions .btn {
+  align-self: flex-start;
+  margin-top: var(--s1);
+}
+
+.integration-progress,
+.integration-feedback,
+.integration-load-error,
+.integration-provider-unavailable,
+.integration-no-secret,
+.integration-empty-state {
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.integration-progress,
+.integration-empty-state {
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.integration-feedback--success {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 9%, transparent);
+}
+
+.integration-feedback--error,
+.integration-load-error,
+.integration-provider-unavailable,
+.integration-no-secret {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.integration-load-error {
+  margin-bottom: var(--s4);
+}
+
+.integration-secret-management {
+  align-self: stretch;
+}
+
+@media (max-width: 1050px) {
+  .admin-integrations-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .integration-revisions {
+    grid-template-columns: 1fr;
+  }
+
+  .integration-card-head {
+    flex-direction: column;
+  }
+
+  .integration-details,
+  .integration-catalog {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+  }
+
+  .integration-details dd,
+  .integration-catalog dd {
+    margin-bottom: var(--s2);
+  }
+
+  .integration-config-form > .btn,
+  .integration-secret-form > .btn,
+  .integration-card-actions,
+  .integration-card-actions .btn {
+    width: 100%;
+  }
 }
