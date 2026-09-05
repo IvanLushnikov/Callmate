@@ -4287,7 +4287,7 @@ function renderUploadPreview(preview) {
 }
 
 function contactsTemplateCsv() {
-  return "phone,name,appointment_date\n+79001234567,Иван,2026-09-01\n";
+  return "phone,name,appointment_date,telegram,vk\n+79001234567,Иван,2026-09-01,,\n";
 }
 
 async function previewContactsFile(file) {
@@ -4374,10 +4374,15 @@ function sectionContacts(camp) {
         .join("")
     : `<tr class="contacts-empty-row"><td colspan="4"><p class="hint contacts-empty">${state.ui.contactsEmptyAfterPurge ? "Контактов пока нет. Загрузите файл, если нужен новый обзвон." : "Загрузите контакты из Excel или CSV. Нужен столбец с телефоном"}</p></td></tr>`;
 
+  const chForImport = state.omni.channelsByCampaign[camp.id] || {};
+  const messengerOptionalHint = chForImport.messenger
+    ? `<p class="hint">Столбцы telegram,vk не обязательны. Id можно не заполнять — поищем по номеру.</p>`
+    : "";
   const uploadZone = `<div class="upload-zone upload-zone-dnd${contacts.length ? " upload-zone-quiet" : " upload-zone-empty"}${state.ui.contactsUploading ? " is-uploading" : ""}" id="upload-zone">
         <div class="upload-zone-main">
           <p class="upload-zone-title">${contacts.length ? "Догрузить файл" : "Перетащите CSV или Excel сюда"}</p>
           <p class="hint">Форматы: .csv, .xlsx · нужен столбец с телефоном</p>
+          ${messengerOptionalHint}
           <div class="upload-zone-actions">
             <button class="btn${contacts.length ? " secondary" : ""}" type="button" id="pick-file" ${roAttr()}${state.ui.contactsUploading ? " disabled" : ""}>Выбрать файл</button>
             <a class="btn ghost" href="#" id="download-template" download="scorix-contacts-template.csv">Скачать шаблон</a>

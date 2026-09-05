@@ -57,5 +57,8 @@ assert.match(pages, /Включите мессенджер в Каналах\./)
 // D-E3-005: chat report reasons must cover all three documented causes, not just "нет канала".
 assert.match(pages, /платформа не приняла/);
 assert.match(pages, /канал error/);
+// D-E3-003 / E3-012: contacts import must say telegram/vk columns are optional (found by phone).
+assert.match(app, /Id можно не заполнять — поищем по номеру\./);
+assert.match(app, /telegram,vk/);
 
 console.log("omni-pages-contract ok");
