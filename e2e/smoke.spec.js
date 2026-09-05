@@ -73,7 +73,7 @@ test.describe("Scorix cabinet smoke (offline stub)", () => {
     await gotoHash(page, "/cabinet/tariffs");
     await expect(page.locator("#sec-tariffs")).toBeVisible();
     await expect(page.getByTestId("tariffs-page")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Биллинг" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Тарифы" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Пакеты минут" })).toBeVisible();
     await expect(page.locator(".tariff-table")).toBeVisible();
     await expect(page.locator(".tariff-row-current")).toBeVisible();
@@ -83,7 +83,7 @@ test.describe("Scorix cabinet smoke (offline stub)", () => {
   test("nav reaches campaigns and tariffs without integrations admin", async ({ page }) => {
     await stubCabinet(page);
     await gotoHash(page, "/cabinet/campaigns");
-    await page.getByRole("link", { name: "Биллинг" }).click();
+    await page.getByRole("link", { name: "Тарифы" }).click();
     await expect(page).toHaveURL(/#\/cabinet\/tariffs/);
     await expect(page.locator("#sec-tariffs")).toBeVisible();
 
