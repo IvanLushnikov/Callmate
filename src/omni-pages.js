@@ -167,17 +167,14 @@ export function pageCrm({ crm = null } = {}) {
     </section>`;
 }
 
-export function pageInboundLine({ line = null, report = [], campaignSync = false } = {}) {
+export function pageInboundLine({ line = null, report = [], campaignSync = false, formless = false } = {}) {
   const hours = line?.hours || {};
   const rows = (report || [])
     .map((r) => `<tr><td>${escape(r.phone_masked || "")}</td><td>${escape(r.label || r.inbound_result || "")}</td></tr>`)
     .join("");
-  return `
-    <section class="desk-page" data-omni-page="inbound">
-      <h1>Входящая линия</h1>
-      <p class="hint">Очереди нет: занято или перевод, без «вы N-й».</p>
-      <p class="hint">Укажите номер, часы и что делать вне часов.</p>
-      <form data-omni-inbound>
+  const form = formless
+    ? `<p class="hint" data-omni-inbound-no-context>Линия настраивается внутри кампании: откройте кампанию → вкладка «Входящие».</p>`
+    : `<form data-omni-inbound>
         <label>Номер, на который звонят<input name="did" required value="${escape(line?.did_number || "")}"></label>
         <label>Часы с<input name="from" type="number" value="${escape(hours.from ?? "")}"> до <input name="to" type="number" value="${escape(hours.to ?? "")}"></label>
         <label>Переадресация вне часов<input name="forward" value="${escape(line?.forward_number || "")}"></label>
@@ -185,7 +182,13 @@ export function pageInboundLine({ line = null, report = [], campaignSync = false
         <p class="hint">Не пишем, если уже перевели на человека.</p>
         <button type="submit" class="btn">Сохранить</button>
       </form>
-      <p class="omni-inbound-error" data-omni-inbound-error hidden></p>
+      <p class="omni-inbound-error" data-omni-inbound-error hidden></p>`;
+  return `
+    <section class="desk-page" data-omni-page="inbound">
+      <h1>Входящая линия</h1>
+      <p class="hint">Очереди нет: занято или перевод, без «вы N-й».</p>
+      ${formless ? "" : `<p class="hint">Укажите номер, часы и что делать вне часов.</p>`}
+      ${form}
       ${campaignSync ? `<label><input type="checkbox" data-crm-sync> Писать в CRM по этой кампании</label>` : ""}
       <h2>Входящие</h2>
       ${rows ? `<table><thead><tr><th>Контакт</th><th>Исход</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="hint">Пока нет данных. Запустите кампанию или смените вкладку.</p>`}
