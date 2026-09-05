@@ -143,7 +143,13 @@ export function pageCrm({ crm = null } = {}) {
             <option value="none" ${preset === "none" ? "selected" : ""}>Не подключать</option>
             <option value="bitrix24" ${preset === "bitrix24" ? "selected" : ""}>Битрикс24</option>
             <option value="amocrm" ${preset === "amocrm" ? "selected" : ""}>amoCRM</option>
+            <option value="salesforce" ${preset === "salesforce" ? "selected" : ""}>Salesforce</option>
+            <option value="hubspot" ${preset === "hubspot" ? "selected" : ""}>HubSpot</option>
+            <option value="zoho_crm" ${preset === "zoho_crm" ? "selected" : ""}>Zoho CRM</option>
+            <option value="pipedrive" ${preset === "pipedrive" ? "selected" : ""}>Pipedrive</option>
+            <option value="megaplan" ${preset === "megaplan" ? "selected" : ""}>Мегаплан</option>
             <option value="retailcrm" ${preset === "retailcrm" ? "selected" : ""}>RetailCRM</option>
+            <option value="dynamics365" ${preset === "dynamics365" ? "selected" : ""}>Microsoft Dynamics 365 Sales</option>
             <option value="custom_rest" ${preset === "custom_rest" ? "selected" : ""}>Свой REST / webhook</option>
           </select>
         </label>
