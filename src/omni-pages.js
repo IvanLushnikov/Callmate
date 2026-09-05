@@ -33,9 +33,12 @@ export function pageWebhook({ hook = null, journal = [] } = {}) {
         `<tr><td>${escape(j.time || j.event_id || "")}</td><td>${escape(j.event || j.event_id || "")}</td><td>${escape(String(j.http_status || ""))}</td><td>${escape(String(j.attempt || j.retried || ""))}</td></tr>`
     )
     .join("");
+  const recent = (journal || []).slice(-5);
+  const deliveryFailing = recent.length > 0 && recent.every((j) => j.status === "failed" || j.status === "exhausted");
   return `
     <section class="desk-page" data-omni-page="webhook">
       <h1>Webhook</h1>
+      ${deliveryFailing ? `<p class="banner error" data-webhook-fail-banner>Последние доставки не проходят. Откройте журнал.</p>` : ""}
       <form data-omni-webhook>
         <label>HTTPS URL<input name="url" type="url" required value="${escape(hook?.url || "")}"></label>
         <label>Секрет HMAC<input name="secret" type="password" autocomplete="new-password" placeholder="${hook?.has_secret ? "сохранён" : ""}"></label>
@@ -89,7 +92,11 @@ export function pageKnowledge({ layer = "company", knowledge = null } = {}) {
   const list = items
     .map((it) => {
       const badge = it.state === "draft" ? `<span class="badge">Черновик · Робот это ещё не читает</span>` : escape(it.published_at || "опубликовано");
-      return `<li data-doc="${escape(it.id)}">${escape(it.name)} — ${badge}</li>`;
+      const action =
+        it.state === "draft"
+          ? `<button type="button" class="btn ghost" data-kb-delete="${escape(it.id)}">Удалить</button>`
+          : `<button type="button" class="btn ghost" data-kb-unpublish="${escape(it.id)}">Снять с публикации</button>`;
+      return `<li data-doc="${escape(it.id)}">${escape(it.name)} — ${badge} ${action}</li>`;
     })
     .join("");
   return `
@@ -101,6 +108,7 @@ export function pageKnowledge({ layer = "company", knowledge = null } = {}) {
       ${items.length ? `<ul data-kb-list>${list}</ul>` : `<p class="hint">Пока нет документов. Загрузите файл или напишите текст.</p>`}
       <form data-omni-kb>
         <textarea name="text" placeholder="Напишите текст…"></textarea>
+        <label>Файл (.txt, .md, .csv, .json)<input type="file" name="file" accept=".txt,.md,.csv,.json"></label>
         <label><input type="checkbox" name="pii"> В индекс попадёт текст файла, включая личные данные, если они там есть.</label>
         <p class="hint">Робот читает опубликованные файлы. Не кладите сюда то, чего не должно быть в ответах.</p>
         <button type="submit" class="btn" ${full ? "disabled" : ""}>Загрузить</button>
