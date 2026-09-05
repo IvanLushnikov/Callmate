@@ -52,5 +52,10 @@ assert.match(api, /\/api\/cabinet\/reports\/chat/);
 assert.match(app, /pageInboundLine\(\{\s*line:\s*null,\s*report:\s*state\.omni\.inboundReport,\s*formless:\s*true\s*\}\)/);
 assert.match(pages, /formless/);
 assert.match(pages, /откройте кампанию/i);
+// D-E3-002: omnichannel policy without chat must say why it's hidden, not just vanish.
+assert.match(pages, /Включите мессенджер в Каналах\./);
+// D-E3-005: chat report reasons must cover all three documented causes, not just "нет канала".
+assert.match(pages, /платформа не приняла/);
+assert.match(pages, /канал error/);
 
 console.log("omni-pages-contract ok");

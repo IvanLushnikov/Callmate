@@ -215,6 +215,7 @@ export function blockChannels({ connected = {}, locked = false, policy = "off", 
           <label><input type="radio" name="policy" value="always" ${policy === "always" ? "checked" : ""}> Всегда писать в мессенджер</label>
           <p class="hint">После звонка напишем в мессенджер — даже если поговорили.</p>
         </fieldset>
+        ${showPolicy ? "" : `<p class="hint" data-omni-policy-hidden>Включите мессенджер в Каналах.</p>`}
         <input type="hidden" name="merge_accepted" value="${mergeAccepted ? "1" : ""}">
         <button type="submit" class="btn" ${locked ? "disabled" : ""}>Сохранить</button>
       </form>
@@ -236,7 +237,7 @@ export function pageChatReport({ rows = [] } = {}) {
     .join("");
   return `<div class="workspace-tab-panel" data-tab="chat" data-omni-page="chat">
     <h2>Чат</h2>
-    <p class="hint">Колонка чата: ответил робот · передали · оператор не взял · нет канала. Не новый статус обзвона.</p>
+    <p class="hint">Колонка чата: ответил робот · передали · оператор не взял · нет канала · платформа не приняла · канал error. Не новый статус обзвона.</p>
     ${body ? `<table><thead><tr><th>Контакт</th><th>Чат</th><th>Исходящий</th></tr></thead><tbody>${body}</tbody></table>` : `<p class="hint">Пока нет данных. Запустите кампанию или смените вкладку.</p>`}
   </div>`;
 }
