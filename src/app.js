@@ -2549,7 +2549,7 @@ function pageAccount() {
   const body = `${lockedNote}
     <div class="desk-link-cards account-links">
       <a class="desk-link-card" href="#/cabinet/tariffs">
-        <span class="desk-link-kicker">Биллинг</span>
+        <span class="desk-link-kicker">Тарифы</span>
         <strong class="desk-link-title">Баланс и тариф</strong>
         <span class="hint">${hasApi() && !state.ui.cabinetMeLoaded ? "Загружаем…" : `${escapeHtml(state.companyBalance == null ? "—" : String(state.companyBalance))} ₽ · ${escapeHtml(state.companyTariff == null || state.companyTariff <= 0 ? "—" : String(state.companyTariff))} ₽/мин`}</span>
       </a>
@@ -2576,7 +2576,7 @@ const TARIFF_PACKAGES = [
 
 function pageTariffs() {
   if (hasApi() && !state.ui.cabinetMeLoaded) {
-    return deskPage("Биллинг", "Баланс, тариф и пакеты минут", `<p class="hint">Загружаем баланс…</p>`, {
+    return deskPage("Тарифы", "Баланс, тариф и пакеты минут", `<p class="hint">Загружаем баланс…</p>`, {
       id: "sec-tariffs",
       className: "tariffs-page",
       testId: "tariffs-page",
@@ -2634,7 +2634,7 @@ function pageTariffs() {
       <p class="hint">Считаем минуты состоявшегося разговора. Недозвон не тарифицируем.</p>
       ${topupBlock}
     </div>`;
-  return deskPage("Биллинг", "Баланс, тариф и пакеты минут", body, {
+  return deskPage("Тарифы", "Баланс, тариф и пакеты минут", body, {
     id: "sec-tariffs",
     className: "tariffs-page",
     testId: "tariffs-page",
@@ -3394,7 +3394,7 @@ function campaignWorkspace(camp) {
       ${blockCallRules(camp)}
       <div class="settings-links row-actions">
         <a class="btn secondary" href="#/cabinet/connections">Подключения</a>
-        <a class="btn secondary" href="#/cabinet/tariffs">Биллинг</a>
+        <a class="btn secondary" href="#/cabinet/tariffs">Тарифы</a>
       </div>
       ${blockCampaignPurge(camp)}
     </div>`;
