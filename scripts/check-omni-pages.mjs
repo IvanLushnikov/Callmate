@@ -47,5 +47,10 @@ assert.match(api, /knowledge\/files|FormData/);
 // P1-2: chat report reads real data, not a hardcoded empty stub.
 assert.doesNotMatch(app, /pageChatReport\(\{\s*rows:\s*\[\]\s*\}\)/);
 assert.match(api, /\/api\/cabinet\/reports\/chat/);
+// P2-3: standalone #/cabinet/inbound has no campaign context, so it must not render
+// a fake blank settings form (line is always per-campaign) — point to the campaign tab instead.
+assert.match(app, /pageInboundLine\(\{\s*line:\s*null,\s*report:\s*state\.omni\.inboundReport,\s*formless:\s*true\s*\}\)/);
+assert.match(pages, /formless/);
+assert.match(pages, /откройте кампанию/i);
 
 console.log("omni-pages-contract ok");

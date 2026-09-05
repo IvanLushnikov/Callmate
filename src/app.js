@@ -2402,7 +2402,7 @@ function cabinetBody(parsed) {
   if (parsed.page === "webhook") return pageWebhook({ hook: state.omni.webhook, journal: state.omni.journal });
   if (parsed.page === "crm") return pageCrm({ crm: state.omni.crm });
   if (parsed.page === "dialogs") return pageDialogs({ items: state.omni.dialogs, empty: !state.omni.dialogs?.length });
-  if (parsed.page === "inbound") return pageInboundLine({ line: null, report: state.omni.inboundReport });
+  if (parsed.page === "inbound") return pageInboundLine({ line: null, report: state.omni.inboundReport, formless: true });
   if (parsed.page === "analytics") return pageAnalytics();
   if (parsed.page === "tariffs") return pageTariffs();
   if (parsed.page === "account") return pageAccount();
