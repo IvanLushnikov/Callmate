@@ -53,6 +53,11 @@ export const ERROR_MESSAGES = {
   sip_network: "Не удалось связаться с вашей АТС. Проверьте адрес и доступность",
   sip_rejected: "Сервер телефонии отклонил подключение",
   sip_unknown: "Не удалось проверить SIP. Попробуйте позже",
+  combine_ack_required: "Покажите предупреждение ещё раз. Не тост.",
+  inbound_number_bound: "Этот номер уже привязан к другой кампании",
+  knowledge_quota_exceeded: "Занято 500 МБ. Удалите файлы или попросите поднять лимит.",
+  whatsapp_not_shipped: "WhatsApp в этом корабле не рабочий",
+  secret_write_only: "Секрет уже сохранён. Значение не показываем.",
   sip_unreachable: "Не удалось связаться с вашей АТС. Проверьте адрес и доступность",
   sip_invalid: "Заполните адрес SIP, логин и пароль",
   telephony_not_ready: "Сначала сохраните настройки SIP",
@@ -250,6 +255,107 @@ export async function billingCheckout({ packageId, session, idempotencyKey }) {
 
 export async function fetchBillingPackages(session) {
   return apiFetch("/api/cabinet/billing/packages", { session });
+}
+
+export async function fetchOmniChannels(campaignId, session) {
+  return apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/channels`, { session });
+}
+
+export async function saveOmniChannels(campaignId, body, session) {
+  return apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/channels`, {
+    method: "PUT",
+    session,
+    body,
+  });
+}
+
+export async function fetchOmniWebhook(session) {
+  return apiFetch("/api/cabinet/webhook", { session });
+}
+
+export async function fetchOmniUsage(session) {
+  return apiFetch("/api/cabinet/usage", { session });
+}
+
+export async function fetchOmniDialogs(session) {
+  return apiFetch("/api/cabinet/dialogs", { session });
+}
+
+export async function saveOmniWebhook(body, session) {
+  return apiFetch("/api/cabinet/webhook", { method: "PUT", session, body });
+}
+
+export async function fetchOmniWebhookJournal(session) {
+  return apiFetch("/api/cabinet/webhook/journal", { session });
+}
+
+export async function fetchOmniKnowledge(session, campaignId) {
+  const path = campaignId
+    ? `/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/knowledge`
+    : "/api/cabinet/knowledge";
+  return apiFetch(path, { session });
+}
+
+export async function saveOmniKnowledgeText(body, session, campaignId) {
+  const path = campaignId
+    ? `/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/knowledge/texts`
+    : "/api/cabinet/knowledge/texts";
+  return apiFetch(path, { method: "POST", session, body });
+}
+
+export async function publishOmniKnowledge(session, campaignId) {
+  const path = campaignId
+    ? `/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/knowledge/publish`
+    : "/api/cabinet/knowledge/publish";
+  return apiFetch(path, { method: "POST", session });
+}
+
+export async function fetchOmniInbound(campaignId, session) {
+  return apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/inbound`, { session });
+}
+
+export async function saveOmniInbound(campaignId, body, session) {
+  return apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/inbound`, {
+    method: "PUT",
+    session,
+    body,
+  });
+}
+
+export async function fetchOmniInboundReport(session) {
+  return apiFetch("/api/cabinet/reports/inbound", { session });
+}
+
+export async function fetchOmniMessengers(session) {
+  return apiFetch("/api/cabinet/messengers", { session });
+}
+
+export async function connectOmniMessenger(kind, body, session) {
+  return apiFetch(`/api/cabinet/messengers/${encodeURIComponent(kind)}`, { method: "PUT", session, body });
+}
+
+export async function fetchOmniCrm(session) {
+  return apiFetch("/api/cabinet/crm", { session });
+}
+
+export async function saveOmniCrm(body, session) {
+  return apiFetch("/api/cabinet/crm", { method: "PUT", session, body });
+}
+
+export async function acceptOmniDialog(id, session) {
+  return apiFetch(`/api/cabinet/dialogs/${encodeURIComponent(id)}/accept`, { method: "POST", session });
+}
+
+export async function closeOmniDialog(id, session) {
+  return apiFetch(`/api/cabinet/dialogs/${encodeURIComponent(id)}/close`, { method: "POST", session });
+}
+
+export async function replyOmniDialog(id, text, session) {
+  return apiFetch(`/api/cabinet/dialogs/${encodeURIComponent(id)}/messages`, {
+    method: "POST",
+    session,
+    body: { text },
+  });
 }
 
 export async function fetchPayment(paymentId, session) {

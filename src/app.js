@@ -13,8 +13,32 @@ import {
   billingCheckout,
   fetchBillingPackages,
   fetchPayment,
+  fetchOmniChannels,
+  fetchOmniWebhook,
+  fetchOmniWebhookJournal,
+  fetchOmniUsage,
+  fetchOmniDialogs,
+  fetchOmniKnowledge,
+  fetchOmniInbound,
+  fetchOmniInboundReport,
+  fetchOmniMessengers,
+  fetchOmniCrm,
 } from "./api.js";
 import { otpauthQrDataUrl } from "./lib/totp-qr.js";
+import {
+  pageConnections,
+  pageWebhook,
+  pageUsage,
+  pageKnowledge,
+  pageDialogs,
+  pageCrm,
+  pageInboundLine,
+  blockChannels,
+  pageChatReport,
+  contactCardBlocks,
+  campaignKnowledgeBlock,
+} from "./omni-pages.js";
+import { bindOmniPages } from "./omni-bind.js";
 
 /** Канон статусов контакта (DESIGN-062). */
 const STATUS = {
@@ -173,17 +197,25 @@ const TIMEZONES = [
 
 const CABINET_TABS = [
   { id: "campaigns", label: "Кампании", href: "#/cabinet/campaigns" },
-  { id: "integrations", label: "Интеграции", href: "#/cabinet/integrations" },
-  { id: "analytics", label: "Аналитика", href: "#/cabinet/analytics" },
-  { id: "tariffs", label: "Биллинг", href: "#/cabinet/tariffs" },
+  { id: "connections", label: "Подключения", href: "#/cabinet/connections" },
+  { id: "knowledge", label: "База знаний", href: "#/cabinet/knowledge" },
+  { id: "analytics", label: "Отчёты", href: "#/cabinet/analytics" },
+  { id: "usage", label: "Использование", href: "#/cabinet/usage" },
+  { id: "tariffs", label: "Тарифы", href: "#/cabinet/tariffs" },
+  { id: "webhook", label: "Webhook", href: "#/cabinet/webhook" },
+  { id: "crm", label: "CRM", href: "#/cabinet/crm" },
+  { id: "dialogs", label: "Диалоги", href: "#/cabinet/dialogs" },
   { id: "account", label: "Настройки", href: "#/cabinet/account" },
 ];
 
 const WORKSPACE_TABS = [
   { id: "overview", label: "Обзор" },
+  { id: "channels", label: "Каналы" },
   { id: "contacts", label: "Контакты" },
   { id: "scenario", label: "Сценарий" },
   { id: "calls", label: "Звонки" },
+  { id: "inbound", label: "Входящие" },
+  { id: "chat", label: "Чат" },
   { id: "results", label: "Результаты" },
   { id: "settings", label: "Настройки" },
 ];
@@ -272,6 +304,20 @@ const state = {
   impersonate: loadJson("scx_impersonate", null, sessionStorage) || loadJson("scx_impersonate", null),
   companies: ensureCompanyIds(loadJson("scx_companies", [])),
   campaigns: hasApi() ? [] : loadJson("scx_campaigns", []),
+  omni: {
+    usage: null,
+    webhook: null,
+    journal: [],
+    knowledge: null,
+    campaignKnowledge: null,
+    crm: null,
+    dialogs: [],
+    messengers: null,
+    inboundReport: [],
+    channelsByCampaign: {},
+    inboundByCampaign: {},
+    loaded: {},
+  },
   telephony: (() => {
     const defaults = {
       status: "unknown",
@@ -329,6 +375,7 @@ const state = {
     purgeDataPending: false,
     contactsEmptyAfterPurge: false,
     workspaceTab: "overview",
+    omniLoaded: false,
     mobileNavOpen: false,
     consentOpen: false,
     contactUploadPreview: null,
@@ -459,7 +506,13 @@ function parseCabinet(path) {
   if (path === "/cabinet/campaigns/new") return { tab: "campaigns", page: "new" };
   const ws = matchPath(path, "/cabinet/campaigns/:id");
   if (ws?.id && ws.id !== "new") return { tab: "campaigns", page: "workspace", id: ws.id };
-  if (path === "/cabinet/integrations") return { tab: "integrations", page: "integrations" };
+  if (path === "/cabinet/integrations" || path === "/cabinet/connections") return { tab: "connections", page: "connections" };
+  if (path === "/cabinet/knowledge") return { tab: "knowledge", page: "knowledge" };
+  if (path === "/cabinet/usage") return { tab: "usage", page: "usage" };
+  if (path === "/cabinet/webhook") return { tab: "webhook", page: "webhook" };
+  if (path === "/cabinet/crm") return { tab: "crm", page: "crm" };
+  if (path === "/cabinet/dialogs") return { tab: "dialogs", page: "dialogs" };
+  if (path === "/cabinet/inbound") return { tab: "connections", page: "inbound" };
   if (path === "/cabinet/analytics") return { tab: "analytics", page: "analytics" };
   if (path === "/cabinet/tariffs") return { tab: "tariffs", page: "tariffs" };
   if (path === "/cabinet/account") return { tab: "account", page: "account" };
@@ -2336,7 +2389,18 @@ function cabinetBody(parsed) {
     state.ui.launchReasonsDrawerOpen = false;
     state.ui.workspaceTab = "overview";
   }
-  if (parsed.page === "integrations") return sectionTelephony();
+  if (parsed.page === "integrations" || parsed.page === "connections") {
+    return pageConnections({
+      sipDead: Boolean(state.omni.inboundSipDead),
+      messengers: state.omni.messengers,
+    }) + sectionTelephony();
+  }
+  if (parsed.page === "knowledge") return pageKnowledge({ knowledge: state.omni.knowledge });
+  if (parsed.page === "usage") return pageUsage({ usage: state.omni.usage });
+  if (parsed.page === "webhook") return pageWebhook({ hook: state.omni.webhook, journal: state.omni.journal });
+  if (parsed.page === "crm") return pageCrm({ crm: state.omni.crm });
+  if (parsed.page === "dialogs") return pageDialogs({ items: state.omni.dialogs, empty: !state.omni.dialogs?.length });
+  if (parsed.page === "inbound") return pageInboundLine({ line: null, report: state.omni.inboundReport });
   if (parsed.page === "analytics") return pageAnalytics();
   if (parsed.page === "tariffs") return pageTariffs();
   if (parsed.page === "account") return pageAccount();
@@ -3205,7 +3269,7 @@ function blockBusinessOutcomes(camp) {
       <thead><tr><th>Итог</th><th>Кол-во</th><th>Доля</th><th>Изменение</th><th>Действие</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <p class="hint">Интеграции с CRM и webhook в кабинете пока нет.</p>
+    <p class="hint">Webhook и CRM — в меню компании, не внутри итогов кампании.</p>
   </section>`;
 }
 
@@ -3299,6 +3363,24 @@ function campaignWorkspace(camp) {
 
   let tabContent = "";
   if (tab === "overview") tabContent = workspaceOverviewTab(camp, weak, started);
+  else if (tab === "channels") {
+    const ch = state.omni.channelsByCampaign[camp.id] || {};
+    tabContent = blockChannels({
+      connected: {
+        voice_outbound: true,
+        voice_inbound: true,
+        messenger: Boolean(ch.messenger_connected || state.omni.messengers?.providers?.some((p) => p.connected)),
+        voice_outbound_on: ch.voice_outbound,
+        voice_inbound_on: ch.voice_inbound,
+        messenger_on: ch.messenger,
+      },
+      locked: started || ch.channels_locked,
+      policy: ch.omnichannel_policy || "off",
+      mergeAccepted: ch.merge_accepted,
+    }) + campaignKnowledgeBlock(state.omni.campaignKnowledge);
+  }
+  else if (tab === "inbound") tabContent = `<div class="workspace-tab-panel" data-tab="inbound">${pageInboundLine({ line: state.omni.inboundByCampaign[camp.id], report: state.omni.inboundReport, campaignSync: true })}</div>`;
+  else if (tab === "chat") tabContent = pageChatReport({ rows: [] });
   else if (tab === "contacts") tabContent = `<div class="workspace-tab-panel" data-tab="contacts">${blockNumbers(camp)}</div>`;
   else if (tab === "scenario") tabContent = `<div class="workspace-tab-panel" data-tab="scenario">${blockScenarioFlow(camp, weak, started)}</div>`;
   else if (tab === "calls")
@@ -3309,7 +3391,7 @@ function campaignWorkspace(camp) {
     tabContent = `<div class="workspace-tab-panel" data-tab="settings">
       ${blockCallRules(camp)}
       <div class="settings-links row-actions">
-        <a class="btn secondary" href="#/cabinet/integrations">Телефония</a>
+        <a class="btn secondary" href="#/cabinet/connections">Подключения</a>
         <a class="btn secondary" href="#/cabinet/tariffs">Биллинг</a>
       </div>
       ${blockCampaignPurge(camp)}
@@ -4668,6 +4750,11 @@ function contactDrawerHtml(camp, contact) {
     ${lastOutcome}
     ${verdictBlock}
     <p class="hint">Вердикт — про цель кампании, не про статус</p>
+    ${contactCardBlocks({
+      outbound: statusLabel(contact.status),
+      inbound: contact.inbound_label || "",
+      chat: contact.messenger_label || "",
+    })}
     ${
       contact.insights_summary
         ? `<details class="contact-insights"><summary>Инсайты</summary><p class="hint">${escapeHtml(contact.insights_summary)}</p></details>`
@@ -5127,6 +5214,9 @@ function render() {
     app.innerHTML = cabinetShell(cabinet.tab, cabinetBody(cabinet));
     bindShell();
     clearFlashSoon();
+    if (hasApi() && state.session) {
+      void hydrateOmni(cabinet).catch((e) => flash(errorMessage(e?.code), "error"));
+    }
     if (hasApi() && !state.ui.cabinetMeLoaded && state.session && state.role !== "superadmin") {
       void refreshCabinetMe()
         .then(() => render())
@@ -5591,6 +5681,13 @@ function bindShell() {
   bindStatuses();
   bindAnalytics();
   bindTariffsBilling();
+  bindOmniPages({
+    state,
+    flash,
+    errorMessage,
+    render,
+    hasApi,
+  });
 }
 
 function bindTariffsBilling() {
@@ -7622,6 +7719,63 @@ function bindCampaignForms() {
       }
       await playVoicePreview(voiceId);
     };
+  }
+}
+
+async function hydrateOmni(cabinet) {
+  if (!hasApi() || !state.session) return;
+  const page = cabinet?.page;
+  if (page === "usage" && !state.omni.loaded.usage) {
+    state.omni.usage = await fetchOmniUsage(state.session);
+    state.omni.loaded.usage = true;
+    render();
+    return;
+  }
+  if (page === "webhook" && !state.omni.loaded.webhook) {
+    state.omni.webhook = await fetchOmniWebhook(state.session);
+    state.omni.journal = (await fetchOmniWebhookJournal(state.session).catch(() => ({ items: [] }))).items || [];
+    state.omni.loaded.webhook = true;
+    render();
+    return;
+  }
+  if (page === "knowledge" && !state.omni.loaded.knowledge) {
+    state.omni.knowledge = await fetchOmniKnowledge(state.session);
+    state.omni.loaded.knowledge = true;
+    render();
+    return;
+  }
+  if (page === "crm" && !state.omni.loaded.crm) {
+    state.omni.crm = await fetchOmniCrm(state.session);
+    state.omni.loaded.crm = true;
+    render();
+    return;
+  }
+  if (page === "dialogs" && !state.omni.loaded.dialogs) {
+    const data = await fetchOmniDialogs(state.session);
+    state.omni.dialogs = data.items || [];
+    state.omni.loaded.dialogs = true;
+    render();
+    return;
+  }
+  if ((page === "connections" || page === "integrations") && !state.omni.loaded.messengers) {
+    state.omni.messengers = await fetchOmniMessengers(state.session).catch(() => ({ providers: [] }));
+    state.omni.loaded.messengers = true;
+    render();
+    return;
+  }
+  if (page === "workspace" && cabinet.id) {
+    const key = `ws:${cabinet.id}:${state.ui.workspaceTab}`;
+    if (state.omni.loaded[key]) return;
+    if (state.ui.workspaceTab === "channels") {
+      state.omni.channelsByCampaign[cabinet.id] = await fetchOmniChannels(cabinet.id, state.session).catch(() => ({}));
+      state.omni.campaignKnowledge = await fetchOmniKnowledge(state.session, cabinet.id).catch(() => null);
+    }
+    if (state.ui.workspaceTab === "inbound") {
+      state.omni.inboundByCampaign[cabinet.id] = await fetchOmniInbound(cabinet.id, state.session).catch(() => null);
+      state.omni.inboundReport = (await fetchOmniInboundReport(state.session).catch(() => ({ items: [] }))).items || [];
+    }
+    state.omni.loaded[key] = true;
+    render();
   }
 }
 
