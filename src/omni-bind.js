@@ -6,8 +6,12 @@ import {
   fetchOmniWebhookJournal,
   saveOmniKnowledgeText,
   publishOmniKnowledge,
+  uploadOmniKnowledgeFile,
+  unpublishOmniKnowledgeDoc,
+  deleteOmniKnowledgeDoc,
   saveOmniInbound,
   connectOmniMessenger,
+  verifyOmniMessenger,
   saveOmniCrm,
   acceptOmniDialog,
   closeOmniDialog,
@@ -137,11 +141,17 @@ function bindKnowledge({ flash, errorMessage, render, session, hasApi, state }) 
     ev.preventDefault();
     if (!hasApi()) return;
     try {
-      await saveOmniKnowledgeText(
-        { title: "note.txt", body: form.elements.text.value, pii_ack: form.elements.pii.checked },
-        session,
-        campaignId
-      );
+      const file = form.elements.file?.files?.[0];
+      if (file) {
+        await uploadOmniKnowledgeFile({ file, piiAck: form.elements.pii.checked }, session, campaignId);
+        form.elements.file.value = "";
+      } else {
+        await saveOmniKnowledgeText(
+          { title: "note.txt", body: form.elements.text.value, pii_ack: form.elements.pii.checked },
+          session,
+          campaignId
+        );
+      }
       flash("Черновик сохранён. Робот это ещё не читает.", "ok");
       state.omni.loaded.knowledge = false;
       render();
@@ -159,6 +169,32 @@ function bindKnowledge({ flash, errorMessage, render, session, hasApi, state }) 
     } catch (ex) {
       flash(errorMessage(ex?.code), "error");
     }
+  });
+  document.querySelectorAll("[data-kb-unpublish]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!hasApi()) return;
+      try {
+        await unpublishOmniKnowledgeDoc(btn.getAttribute("data-kb-unpublish"), session, campaignId);
+        flash("Документ снят с публикации", "ok");
+        state.omni.loaded.knowledge = false;
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
+    });
+  });
+  document.querySelectorAll("[data-kb-delete]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!hasApi()) return;
+      try {
+        await deleteOmniKnowledgeDoc(btn.getAttribute("data-kb-delete"), session, campaignId);
+        flash("Документ удалён", "ok");
+        state.omni.loaded.knowledge = false;
+        render();
+      } catch (ex) {
+        flash(errorMessage(ex?.code), "error");
+      }
+    });
   });
 }
 
@@ -198,6 +234,13 @@ function bindInbound({ flash, errorMessage, render, session, hasApi, state }) {
   });
 }
 
+const MESSENGER_VERIFY_TEXT = {
+  ok: "Мессенджер подключён и проверен",
+  error: "Токен сохранён, но проверка связи не прошла. Перепроверьте его в кабинете мессенджера.",
+  network_unreachable: "Токен сохранён. Проверить связь сейчас не удалось — сеть недоступна.",
+  not_connected: "Мессенджер подключён",
+};
+
 function bindConnect({ flash, errorMessage, render, session, hasApi, state }) {
   const form = document.querySelector("[data-omni-connect]");
   if (!form) return;
@@ -207,12 +250,20 @@ function bindConnect({ flash, errorMessage, render, session, hasApi, state }) {
     try {
       const tg = form.elements.telegram_token.value;
       const vk = form.elements.vk_token.value;
-      if (tg) await connectOmniMessenger("telegram", { token: tg }, session);
-      if (vk) await connectOmniMessenger("vk", { token: vk }, session);
+      const results = [];
+      if (tg) {
+        await connectOmniMessenger("telegram", { token: tg }, session);
+        results.push(await verifyOmniMessenger("telegram", session).catch(() => ({ connection_status: "error" })));
+      }
+      if (vk) {
+        await connectOmniMessenger("vk", { token: vk }, session);
+        results.push(await verifyOmniMessenger("vk", session).catch(() => ({ connection_status: "error" })));
+      }
       form.elements.telegram_token.value = "";
       form.elements.vk_token.value = "";
       state.omni.loaded.messengers = false;
-      flash("Мессенджер подключён", "ok");
+      const worstStatus = results.map((r) => r.connection_status).find((s) => s !== "ok") || "ok";
+      flash(MESSENGER_VERIFY_TEXT[worstStatus] || MESSENGER_VERIFY_TEXT.ok, worstStatus === "ok" ? "ok" : "error");
       render();
     } catch (ex) {
       flash(errorMessage(ex?.code) || "Не удалось проверить мессенджер.", "error");

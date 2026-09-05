@@ -21,6 +21,7 @@ import {
   fetchOmniKnowledge,
   fetchOmniInbound,
   fetchOmniInboundReport,
+  fetchOmniChatReport,
   fetchOmniMessengers,
   fetchOmniCrm,
 } from "./api.js";
@@ -314,6 +315,7 @@ const state = {
     dialogs: [],
     messengers: null,
     inboundReport: [],
+    chatReport: [],
     channelsByCampaign: {},
     inboundByCampaign: {},
     loaded: {},
@@ -3380,7 +3382,7 @@ function campaignWorkspace(camp) {
     }) + campaignKnowledgeBlock(state.omni.campaignKnowledge);
   }
   else if (tab === "inbound") tabContent = `<div class="workspace-tab-panel" data-tab="inbound">${pageInboundLine({ line: state.omni.inboundByCampaign[camp.id], report: state.omni.inboundReport, campaignSync: true })}</div>`;
-  else if (tab === "chat") tabContent = pageChatReport({ rows: [] });
+  else if (tab === "chat") tabContent = pageChatReport({ rows: state.omni.chatReport || [] });
   else if (tab === "contacts") tabContent = `<div class="workspace-tab-panel" data-tab="contacts">${blockNumbers(camp)}</div>`;
   else if (tab === "scenario") tabContent = `<div class="workspace-tab-panel" data-tab="scenario">${blockScenarioFlow(camp, weak, started)}</div>`;
   else if (tab === "calls")
@@ -7773,6 +7775,9 @@ async function hydrateOmni(cabinet) {
     if (state.ui.workspaceTab === "inbound") {
       state.omni.inboundByCampaign[cabinet.id] = await fetchOmniInbound(cabinet.id, state.session).catch(() => null);
       state.omni.inboundReport = (await fetchOmniInboundReport(state.session).catch(() => ({ items: [] }))).items || [];
+    }
+    if (state.ui.workspaceTab === "chat") {
+      state.omni.chatReport = (await fetchOmniChatReport(state.session).catch(() => ({ items: [] }))).items || [];
     }
     state.omni.loaded[key] = true;
     render();

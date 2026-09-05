@@ -35,4 +35,17 @@ assert.match(api, /\/api\/cabinet\/messengers/);
 assert.match(api, /\/api\/cabinet\/crm/);
 assert.doesNotMatch(app, /пункт кампании.*Телефония/);
 
+// P1-5: webhook decline banner — exact TZ §5 wording, rendered conditionally (not a hardcoded toast).
+assert.match(pages, /Последние доставки не проходят\. Откройте журнал\./);
+assert.match(pages, /data-webhook-fail-banner/);
+// P1-4: messenger "проверить связь" is a distinct live step, not just PUT-save.
+assert.match(api, /\/verify/);
+assert.match(bind, /verifyOmniMessenger/);
+// P1-3: real file upload path for the knowledge base, not text-only.
+assert.match(pages, /type="file"/);
+assert.match(api, /knowledge\/files|FormData/);
+// P1-2: chat report reads real data, not a hardcoded empty stub.
+assert.doesNotMatch(app, /pageChatReport\(\{\s*rows:\s*\[\]\s*\}\)/);
+assert.match(api, /\/api\/cabinet\/reports\/chat/);
+
 console.log("omni-pages-contract ok");

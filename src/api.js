@@ -310,6 +310,30 @@ export async function publishOmniKnowledge(session, campaignId) {
   return apiFetch(path, { method: "POST", session });
 }
 
+export async function uploadOmniKnowledgeFile({ file, piiAck }, session, campaignId) {
+  const path = campaignId
+    ? `/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/knowledge/files`
+    : "/api/cabinet/knowledge/files";
+  const form = new FormData();
+  form.append("file", file, file.name);
+  if (piiAck) form.append("pii_ack", "1");
+  return apiFetch(path, { method: "POST", session, body: form });
+}
+
+export async function unpublishOmniKnowledgeDoc(docId, session, campaignId) {
+  const path = campaignId
+    ? `/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/knowledge/${encodeURIComponent(docId)}/unpublish`
+    : `/api/cabinet/knowledge/${encodeURIComponent(docId)}/unpublish`;
+  return apiFetch(path, { method: "POST", session });
+}
+
+export async function deleteOmniKnowledgeDoc(docId, session, campaignId) {
+  const path = campaignId
+    ? `/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/knowledge/${encodeURIComponent(docId)}`
+    : `/api/cabinet/knowledge/${encodeURIComponent(docId)}`;
+  return apiFetch(path, { method: "DELETE", session });
+}
+
 export async function fetchOmniInbound(campaignId, session) {
   return apiFetch(`/api/cabinet/campaigns/${encodeURIComponent(campaignId)}/inbound`, { session });
 }
@@ -326,12 +350,21 @@ export async function fetchOmniInboundReport(session) {
   return apiFetch("/api/cabinet/reports/inbound", { session });
 }
 
+export async function fetchOmniChatReport(session) {
+  return apiFetch("/api/cabinet/reports/chat", { session });
+}
+
 export async function fetchOmniMessengers(session) {
   return apiFetch("/api/cabinet/messengers", { session });
 }
 
 export async function connectOmniMessenger(kind, body, session) {
   return apiFetch(`/api/cabinet/messengers/${encodeURIComponent(kind)}`, { method: "PUT", session, body });
+}
+
+/** Live "проверить связь" step — separate from PUT save, per OC-E3-messenger.md. */
+export async function verifyOmniMessenger(kind, session) {
+  return apiFetch(`/api/cabinet/messengers/${encodeURIComponent(kind)}/verify`, { method: "POST", session });
 }
 
 export async function fetchOmniCrm(session) {
